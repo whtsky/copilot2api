@@ -1,0 +1,39 @@
+# Binaries
+copilot2api
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test
+*.test
+*.out
+coverage.out
+
+# Dependency directories
+vendor/
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Debug
+*.prof
+__debug_bin*
+
+# Local config
+.env
+.env.*
+copilot2api-darwin-arm64

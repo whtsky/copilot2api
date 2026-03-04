@@ -1,0 +1,57 @@
+package anthropic
+
+import "testing"
+
+func TestModelSupportsEndpoint_NormalizedV1Prefix(t *testing.T) {
+	info := &ModelInfo{SupportedEndpoints: []string{"/messages", "/responses"}}
+
+	if !modelSupportsEndpoint(info, "/v1/messages") {
+		t.Fatal("expected /v1/messages to match /messages")
+	}
+
+	if !modelSupportsEndpoint(info, "/responses") {
+		t.Fatal("expected /responses to be supported")
+	}
+
+	if modelSupportsEndpoint(info, "/v1/chat/completions") {
+		t.Fatal("did not expect /v1/chat/completions to be supported")
+	}
+}
+
+func TestResolveModelAlias(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		// Explicit aliases
+		{"claude-opus-4-6", "claude-opus-4.6"},
+		{"claude-opus-4-6-fast", "claude-opus-4.6-fast"},
+		{"claude-sonnet-4-6", "claude-sonnet-4.6"},
+		{"claude-haiku-4-5", "claude-haiku-4.5"},
+		{"claude-opus-4-5", "claude-opus-4.5"},
+		{"claude-sonnet-4-5", "claude-sonnet-4.5"},
+		// Date-suffix aliases
+		{"claude-haiku-4-5-20251001", "claude-haiku-4.5"},
+		{"claude-haiku-4.5-20251001", "claude-haiku-4.5"},
+		{"claude-sonnet-4-20250514", "claude-sonnet-4"},
+		// Generic normalizer: unknown model with hyphen version
+		{"claude-sonnet-4-6-fast", "claude-sonnet-4.6-fast"},
+		// Already canonical — no change
+		{"claude-opus-4.6", "claude-opus-4.6"},
+		{"claude-sonnet-4", "claude-sonnet-4"},
+		// No version numbers to normalize
+		{"claude-sonnet", "claude-sonnet"},
+		// Hyphenated dates must NOT be corrupted
+		{"claude-sonnet-4-2025-04-14", "claude-sonnet-4-2025-04-14"},
+		{"claude-3-5-sonnet-2025-04-14", "claude-3.5-sonnet-2025-04-14"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := resolveModelAlias(tt.input)
+			if got != tt.want {
+				t.Errorf("resolveModelAlias(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
