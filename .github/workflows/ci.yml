@@ -4,6 +4,12 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+  packages: write
 
 jobs:
   test:
@@ -29,6 +35,14 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.x"
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "ldflags=-s -w -X main.version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ldflags=-s -w" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build all platforms
         run: |
           mkdir -p dist
@@ -38,7 +52,7 @@ jobs:
               if [ "$goos" = "windows" ]; then ext=".exe"; fi
               echo "Building $goos/$goarch..."
               GOOS=$goos GOARCH=$goarch go build -v \
-                -ldflags="-s -w" \
+                -ldflags="${{ steps.version.outputs.ldflags }}" \
                 -o "dist/copilot2api-$goos-$goarch$ext" .
             done
           done
@@ -46,14 +60,16 @@ jobs:
         with:
           name: copilot2api-binaries
           path: dist/*
+      - name: Upload to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.ref_name }} dist/copilot2api-*
 
   docker:
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     needs: [test]
-    permissions:
-      contents: read
-      packages: write
     steps:
       - uses: actions/checkout@v6
       - uses: docker/setup-qemu-action@v3
@@ -68,8 +84,10 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=sha
-            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=semver,pattern={{version}},enable=${{ github.event_name == 'release' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'release' }}
+            type=sha,enable=${{ github.event_name == 'push' }}
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') || github.event_name == 'release' }}
       - uses: docker/build-push-action@v6
         with:
           context: .
