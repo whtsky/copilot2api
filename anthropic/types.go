@@ -191,15 +191,21 @@ type AnthropicStreamEvent struct {
 	Message      *AnthropicMessagesResponse     `json:"message,omitempty"`
 	Index        *int                           `json:"index,omitempty"`
 	ContentBlock *AnthropicContentBlock         `json:"content_block,omitempty"`
-	Delta        *AnthropicContentBlockDelta    `json:"delta,omitempty"`
-	Usage        interface{}                     `json:"usage,omitempty"`
+	Delta        interface{}                    `json:"delta,omitempty"`
+	Usage        interface{}                    `json:"usage,omitempty"`
 	Error        *AnthropicError                `json:"error,omitempty"`
 }
 
-type AnthropicContentBlockDelta struct {
-	StopReason   string `json:"stop_reason,omitempty"`
-	StopSequence string `json:"stop_sequence,omitempty"`
-	Type        string `json:"type,omitempty"` // "text_delta", "input_json_delta", "thinking_delta", "signature_delta"
+// AnthropicMessageDelta is the delta payload for message_delta events.
+// Per Anthropic spec: always includes stop_reason and stop_sequence.
+type AnthropicMessageDelta struct {
+	StopReason   string  `json:"stop_reason"`
+	StopSequence *string `json:"stop_sequence"` // always present, null when not applicable
+}
+
+// AnthropicContentDelta is the delta payload for content_block_delta events.
+type AnthropicContentDelta struct {
+	Type        string `json:"type"`                   // "text_delta", "input_json_delta", "thinking_delta", "signature_delta"
 	Text        string `json:"text,omitempty"`
 	PartialJSON string `json:"partial_json,omitempty"`
 	Thinking    string `json:"thinking,omitempty"`
@@ -218,11 +224,17 @@ type OpenAIChatCompletionsRequest struct {
 	MaxTokens         *int                       `json:"max_tokens,omitempty"`
 	Stop              interface{}                `json:"stop,omitempty"` // string or []string
 	Stream            bool                       `json:"stream,omitempty"`
+	StreamOptions     *OpenAIStreamOptions       `json:"stream_options,omitempty"`
 	User              string                     `json:"user,omitempty"`
 	Metadata          map[string]string          `json:"metadata,omitempty"`
 	ThinkingBudget    *int                       `json:"thinking_budget,omitempty"`
 	ReasoningText     *string                    `json:"reasoning_text,omitempty"`
 	ReasoningOpaque   *string                    `json:"reasoning_opaque,omitempty"`
+}
+
+// OpenAIStreamOptions controls streaming behavior options.
+type OpenAIStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type OpenAIMessage struct {

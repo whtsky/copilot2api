@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,51 +11,36 @@ import (
 	"time"
 
 	"github.com/whtsky/copilot2api/auth"
-	"github.com/whtsky/copilot2api/internal/cache"
+	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/internal/upstream"
 )
 
 type Handler struct {
 	upstream    *upstream.Client
 	authClient  *auth.Client
-	modelsCache *cache.Cache[[]byte]
+	modelsCache *models.Cache
 }
 
 // NewHandler creates a new proxy handler.
 // The transport is used for upstream HTTP requests (pass nil to create a new one).
-func NewHandler(authClient *auth.Client, transport *http.Transport) *Handler {
+func NewHandler(authClient *auth.Client, transport *http.Transport, mc *models.Cache) *Handler {
 	return &Handler{
 		upstream:    upstream.NewClient(authClient, transport),
 		authClient:  authClient,
-		modelsCache: cache.New[[]byte](5 * time.Minute),
+		modelsCache: mc,
 	}
-}
-
-// WarmModels pre-populates the models cache to avoid cold-cache latency.
-func (h *Handler) WarmModels(ctx context.Context) {
-	_, err := h.modelsCache.Get(ctx, func(ctx context.Context) ([]byte, error) {
-		return h.doModelsRequest(ctx)
-	})
-	if err != nil {
-		slog.Warn("failed to warm models cache", "error", err)
-	}
-}
-
-// doModelsRequest fetches /models from upstream.
-func (h *Handler) doModelsRequest(ctx context.Context) ([]byte, error) {
-	_, respData, err := h.upstream.Do(ctx, upstream.Request{
-		Method:   "GET",
-		Endpoint: "/models",
-	})
-	return respData, err
 }
 
 // ServeHTTP handles all proxy requests
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
 	// Extract endpoint from path
 	endpoint := strings.TrimPrefix(r.URL.Path, "/v1")
+	defer func() {
+		slog.Info("proxy request", "method", r.Method, "endpoint", endpoint, "duration_ms", time.Since(start).Milliseconds())
+	}()
 
-	slog.Debug("proxy request", "method", r.Method, "path", r.URL.Path, "endpoint", endpoint)
 	switch endpoint {
 	case "/models":
 		h.handleModels(w, r)
@@ -78,17 +62,14 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respData, err := h.modelsCache.Get(r.Context(), func(ctx context.Context) ([]byte, error) {
-		return h.doModelsRequest(ctx)
-	})
-
+	respData, err := h.modelsCache.GetRaw(r.Context())
 	if err != nil {
 		var upstreamErr *upstream.UpstreamError
 		if errors.As(err, &upstreamErr) {
 			upstreamErr.WriteRawError(w)
 			return
 		}
-		slog.Error("failed to fetch models", "error", err)
+		upstream.LogRequestError("failed to fetch models", err)
 		WriteOpenAIError(w, http.StatusInternalServerError, OpenAIErrorTypeServerError, "Internal server error")
 		return
 	}
@@ -102,14 +83,13 @@ func (h *Handler) handlePassthrough(w http.ResponseWriter, r *http.Request, endp
 	// Check body size before processing — reject oversized payloads with 413
 	var bodyBytes []byte
 	if r.Body != nil {
-		const maxBodySize = 10 << 20 // 10MB
 		var err error
-		bodyBytes, err = io.ReadAll(io.LimitReader(r.Body, maxBodySize+1))
+		bodyBytes, err = io.ReadAll(io.LimitReader(r.Body, upstream.MaxRequestBody+1))
 		if err != nil {
 			WriteOpenAIError(w, http.StatusBadRequest, OpenAIErrorTypeInvalidRequest, "Failed to read request body")
 			return
 		}
-		if len(bodyBytes) > maxBodySize {
+		if len(bodyBytes) > upstream.MaxRequestBody {
 			WriteOpenAIError(w, http.StatusRequestEntityTooLarge, OpenAIErrorTypeInvalidRequest, "Request body too large")
 			return
 		}
@@ -125,7 +105,7 @@ func (h *Handler) handlePassthroughBody(w http.ResponseWriter, r *http.Request, 
 	// Check if this is a streaming request
 	if isStreamingRequest(bodyBytes) {
 		if err := h.HandleStreamingRequest(w, r, endpoint); err != nil {
-			slog.Error("streaming request failed", "endpoint", endpoint, "error", err)
+		upstream.LogRequestError("streaming request failed", err, "endpoint", endpoint)
 			// If headers were already sent we can't write an HTTP error.
 			// Otherwise, send a proper 502 so the client doesn't get an empty 200.
 			var hse *headersSentError
@@ -145,7 +125,7 @@ func (h *Handler) handlePassthroughBody(w http.ResponseWriter, r *http.Request, 
 			upstreamErr.WriteRawError(w)
 			return
 		}
-		slog.Error("passthrough request failed", "endpoint", endpoint, "error", err)
+		upstream.LogRequestError("passthrough request failed", err, "endpoint", endpoint)
 		WriteOpenAIError(w, http.StatusInternalServerError, OpenAIErrorTypeServerError, "Internal server error")
 		return
 	}
@@ -203,7 +183,7 @@ func (h *Handler) HandleUsage(w http.ResponseWriter, r *http.Request) {
 
 // handleEmbeddings normalizes input to array format before proxying
 func (h *Handler) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB limit
+	r.Body = http.MaxBytesReader(w, r.Body, upstream.MaxRequestBody) // 10MB limit
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		WriteOpenAIError(w, http.StatusBadRequest, OpenAIErrorTypeInvalidRequest, "Failed to read request body")

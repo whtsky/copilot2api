@@ -122,12 +122,13 @@ func TestTranslateResponsesStreamEvent_OutputTextDelta(t *testing.T) {
 		t.Errorf("Expected 'content_block_delta', got %q", deltaEvent.Type)
 	}
 
-	if deltaEvent.Delta == nil || deltaEvent.Delta.Type != "text_delta" {
+	cd := contentDelta(t, deltaEvent)
+	if cd.Type != "text_delta" {
 		t.Error("Expected text_delta")
 	}
 
-	if deltaEvent.Delta.Text != "Hello, world!" {
-		t.Errorf("Expected text 'Hello, world!', got %q", deltaEvent.Delta.Text)
+	if cd.Text != "Hello, world!" {
+		t.Errorf("Expected text 'Hello, world!', got %q", cd.Text)
 	}
 
 	if !state.BlockHasDelta[0] {
@@ -181,8 +182,9 @@ func TestTranslateResponsesStreamEvent_OutputTextDeltaSubsequent(t *testing.T) {
 		t.Errorf("Expected 'content_block_delta', got %q", events[0].Type)
 	}
 
-	if events[0].Delta.Text != " world" {
-		t.Errorf("Expected text ' world', got %q", events[0].Delta.Text)
+	cd := contentDelta(t, events[0])
+	if cd.Text != " world" {
+		t.Errorf("Expected text ' world', got %q", cd.Text)
 	}
 }
 
@@ -216,12 +218,13 @@ func TestTranslateResponsesStreamEvent_ReasoningSummaryTextDelta(t *testing.T) {
 		t.Errorf("Expected 'content_block_delta', got %q", deltaEvent.Type)
 	}
 
-	if deltaEvent.Delta == nil || deltaEvent.Delta.Type != "thinking_delta" {
+	cd := contentDelta(t, deltaEvent)
+	if cd.Type != "thinking_delta" {
 		t.Error("Expected thinking_delta")
 	}
 
-	if deltaEvent.Delta.Thinking != "Let me think..." {
-		t.Errorf("Expected thinking 'Let me think...', got %q", deltaEvent.Delta.Thinking)
+	if cd.Thinking != "Let me think..." {
+		t.Errorf("Expected thinking 'Let me think...', got %q", cd.Thinking)
 	}
 
 	if !state.BlockHasDelta[0] {
@@ -279,12 +282,13 @@ func TestTranslateResponsesStreamEvent_FunctionCallArgumentsDelta(t *testing.T) 
 		t.Errorf("Expected 'content_block_delta', got %q", e.Type)
 	}
 
-	if e.Delta == nil || e.Delta.Type != "input_json_delta" {
+	cd := contentDelta(t, e)
+	if cd.Type != "input_json_delta" {
 		t.Error("Expected input_json_delta")
 	}
 
-	if e.Delta.PartialJSON != `{"query":` {
-		t.Errorf("Expected partial JSON '{\"query\":', got %q", e.Delta.PartialJSON)
+	if cd.PartialJSON != `{"query":` {
+		t.Errorf("Expected partial JSON '{\"query\":', got %q", cd.PartialJSON)
 	}
 }
 
@@ -321,7 +325,7 @@ func TestTranslateResponsesStreamEvent_OutputItemDoneReasoning(t *testing.T) {
 
 	events := TranslateResponsesStreamEvent(event, state)
 
-	// Expect: content_block_start (thinking), thinking_delta (default text), signature_delta
+	// Expect: content_block_start (thinking), thinking_delta (empty), signature_delta
 	if len(events) != 3 {
 		t.Fatalf("Expected 3 events, got %d", len(events))
 	}
@@ -335,27 +339,25 @@ func TestTranslateResponsesStreamEvent_OutputItemDoneReasoning(t *testing.T) {
 		t.Error("Expected thinking content block")
 	}
 
-	// Second: thinking_delta with default text (since summary is empty)
-	if events[1].Type != "content_block_delta" {
-		t.Errorf("Expected 'content_block_delta', got %q", events[1].Type)
+	// Second: thinking_delta with empty text (no fake "Thinking..." injected)
+	cd1 := contentDelta(t, events[1])
+	if cd1.Type != "thinking_delta" {
+		t.Errorf("Expected 'thinking_delta', got %q", cd1.Type)
 	}
 
-	if events[1].Delta.Type != "thinking_delta" {
-		t.Errorf("Expected 'thinking_delta', got %q", events[1].Delta.Type)
-	}
-
-	if events[1].Delta.Thinking != ThinkingText {
-		t.Errorf("Expected default thinking text %q, got %q", ThinkingText, events[1].Delta.Thinking)
+	if cd1.Thinking != "" {
+		t.Errorf("Expected empty thinking text, got %q", cd1.Thinking)
 	}
 
 	// Third: signature_delta
-	if events[2].Delta.Type != "signature_delta" {
-		t.Errorf("Expected 'signature_delta', got %q", events[2].Delta.Type)
+	cd2 := contentDelta(t, events[2])
+	if cd2.Type != "signature_delta" {
+		t.Errorf("Expected 'signature_delta', got %q", cd2.Type)
 	}
 
 	expectedSig := "encrypted_data@reasoning_1"
-	if events[2].Delta.Signature != expectedSig {
-		t.Errorf("Expected signature %q, got %q", expectedSig, events[2].Delta.Signature)
+	if cd2.Signature != expectedSig {
+		t.Errorf("Expected signature %q, got %q", expectedSig, cd2.Signature)
 	}
 }
 
@@ -387,17 +389,17 @@ func TestTranslateResponsesStreamEvent_OutputItemDoneReasoningWithSummary(t *tes
 
 	events := TranslateResponsesStreamEvent(event, state)
 
-	// Should NOT include default thinking text since summary was non-empty
+	// Should NOT include thinking_delta since summary was non-empty
 	for _, e := range events {
-		if e.Delta != nil && e.Delta.Type == "thinking_delta" && e.Delta.Thinking == ThinkingText {
-			t.Error("Should not emit default thinking text when summary is present")
+		if isContentDelta(e, "thinking_delta") {
+			t.Error("Should not emit thinking_delta when summary is present")
 		}
 	}
 
 	// Should include signature
 	found := false
 	for _, e := range events {
-		if e.Delta != nil && e.Delta.Type == "signature_delta" {
+		if isContentDelta(e, "signature_delta") {
 			found = true
 			break
 		}
@@ -476,8 +478,9 @@ func TestTranslateResponsesStreamEvent_Completed(t *testing.T) {
 		t.Errorf("Expected 'message_delta', got %q", events[1].Type)
 	}
 
-	if events[1].Delta == nil || events[1].Delta.StopReason != "end_turn" {
-		t.Errorf("Expected stop reason 'end_turn', got %q", events[1].Delta.StopReason)
+	md := messageDelta(t, events[1])
+	if md.StopReason != "end_turn" {
+		t.Errorf("Expected stop reason 'end_turn', got %q", md.StopReason)
 	}
 
 	if events[1].Usage == nil {
@@ -522,8 +525,9 @@ func TestTranslateResponsesStreamEvent_CompletedNilResponse(t *testing.T) {
 		t.Errorf("Expected 'message_delta', got %q", events[0].Type)
 	}
 
-	if events[0].Delta.StopReason != "end_turn" {
-		t.Errorf("Expected stop reason 'end_turn', got %q", events[0].Delta.StopReason)
+	md := messageDelta(t, events[0])
+	if md.StopReason != "end_turn" {
+		t.Errorf("Expected stop reason 'end_turn', got %q", md.StopReason)
 	}
 
 	if events[1].Type != "message_stop" {
@@ -571,13 +575,9 @@ func TestTranslateResponsesStreamEvent_OutputItemAddedFunctionCall(t *testing.T)
 	}
 
 	// Second event: initial arguments delta
-	deltaEvent := events[1]
-	if deltaEvent.Type != "content_block_delta" {
-		t.Errorf("Expected 'content_block_delta', got %q", deltaEvent.Type)
-	}
-
-	if deltaEvent.Delta.PartialJSON != `{"q":"test"}` {
-		t.Errorf("Expected partial JSON '{\"q\":\"test\"}', got %q", deltaEvent.Delta.PartialJSON)
+	cd := contentDelta(t, events[1])
+	if cd.PartialJSON != `{"q":"test"}` {
+		t.Errorf("Expected partial JSON '{\"q\":\"test\"}', got %q", cd.PartialJSON)
 	}
 }
 
@@ -724,7 +724,7 @@ func TestTranslateResponsesStreamEvent_ComplexFlow(t *testing.T) {
 	// Should include signature_delta
 	hasSig := false
 	for _, e := range events3 {
-		if e.Delta != nil && e.Delta.Type == "signature_delta" {
+		if isContentDelta(e, "signature_delta") {
 			hasSig = true
 		}
 	}

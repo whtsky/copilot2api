@@ -484,3 +484,78 @@ func floatPtr(f float64) *float64 {
 	return &f
 }
 
+func TestConvertOpenAIToAnthropic_SplitChoices(t *testing.T) {
+	// Copilot API returns split choices for Claude models:
+	// text in choice 0, tool_calls in choice 1
+	openAIResp := OpenAIChatCompletionsResponse{
+		ID:    "msg_split",
+		Model: "claude-opus-4.6",
+		Choices: []OpenAIChoice{
+			{
+				Index: 0,
+				Message: OpenAIMessage{
+					Role: "assistant",
+					Content: &OpenAIContent{
+						Text: stringPtr("Let me search for that."),
+					},
+				},
+				FinishReason: "stop",
+			},
+			{
+				Index: 1,
+				Message: OpenAIMessage{
+					Role: "assistant",
+					ToolCalls: []OpenAIToolCall{
+						{
+							ID:   "call_abc",
+							Type: "function",
+							Function: OpenAIToolCallFunction{
+								Name:      "web_search",
+								Arguments: `{"query": "latest news"}`,
+							},
+						},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+		},
+		Usage: &OpenAIUsage{
+			PromptTokens:     100,
+			CompletionTokens: 50,
+			TotalTokens:      150,
+		},
+	}
+
+	anthropicResp, err := ConvertOpenAIToAnthropic(openAIResp)
+	if err != nil {
+		t.Fatalf("Conversion failed: %v", err)
+	}
+
+	// Should merge both choices: text + tool_use
+	if len(anthropicResp.Content) != 2 {
+		t.Fatalf("Expected 2 content blocks (text + tool_use), got %d", len(anthropicResp.Content))
+	}
+
+	if anthropicResp.Content[0].Type != "text" {
+		t.Errorf("Expected first block type 'text', got %q", anthropicResp.Content[0].Type)
+	}
+	if anthropicResp.Content[0].Text != "Let me search for that." {
+		t.Errorf("Expected text content, got %q", anthropicResp.Content[0].Text)
+	}
+
+	if anthropicResp.Content[1].Type != "tool_use" {
+		t.Errorf("Expected second block type 'tool_use', got %q", anthropicResp.Content[1].Type)
+	}
+	if anthropicResp.Content[1].ID != "call_abc" {
+		t.Errorf("Expected tool call ID 'call_abc', got %q", anthropicResp.Content[1].ID)
+	}
+	if anthropicResp.Content[1].Name != "web_search" {
+		t.Errorf("Expected tool name 'web_search', got %q", anthropicResp.Content[1].Name)
+	}
+
+	// tool_calls finish_reason should win over stop
+	if anthropicResp.StopReason != "tool_use" {
+		t.Errorf("Expected stop_reason 'tool_use', got %q", anthropicResp.StopReason)
+	}
+}
+

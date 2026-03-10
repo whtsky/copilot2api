@@ -15,6 +15,7 @@ import (
 
 	"github.com/whtsky/copilot2api/anthropic"
 	"github.com/whtsky/copilot2api/auth"
+	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/internal/upstream"
 	"github.com/whtsky/copilot2api/proxy"
 )
@@ -107,11 +108,16 @@ func main() {
 	// Shared HTTP transport for all upstream requests
 	transport := upstream.NewTransport()
 
+	// Shared models cache — a single fetch populates both raw JSON (for
+	// proxying GET /v1/models) and parsed model info (for capability detection).
+	upstreamClient := upstream.NewClient(authClient, transport)
+	modelsCache := models.NewCache(upstreamClient, 5*time.Minute)
+
 	// Initialize proxy handler
-	proxyHandler := proxy.NewHandler(authClient, transport)
+	proxyHandler := proxy.NewHandler(authClient, transport, modelsCache)
 
 	// Initialize Anthropic handler
-	anthropicHandler := anthropic.NewHandler(authClient, transport)
+	anthropicHandler := anthropic.NewHandler(authClient, transport, modelsCache)
 
 	// Set up routes
 	mux := http.NewServeMux()
@@ -125,9 +131,8 @@ func main() {
 	// Pre-warm models cache to avoid cold-cache latency on first request
 	go func() {
 		slog.Debug("warming models cache")
-		proxyHandler.WarmModels(ctx)
-		anthropicHandler.WarmModels(ctx)
-		slog.Debug("models cache warmed")
+		modelsCache.Warm(ctx)
+		slog.Info("models cache warmed")
 	}()
 
 	// Create server

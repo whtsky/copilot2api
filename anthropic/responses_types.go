@@ -1,9 +1,5 @@
 package anthropic
 
-// ThinkingText is the default thinking text for compatibility with clients
-// that filter out empty thinking blocks (e.g., opencode).
-const ThinkingText = "Thinking..."
-
 // codexPhaseModel is the model ID that requires phase annotations on assistant messages.
 const codexPhaseModel = "gpt-5.3-codex"
 
@@ -191,17 +187,4 @@ func NewResponsesStreamState() *ResponsesStreamState {
 		BlockHasDelta:                  make(map[int]bool),
 		FunctionCallStateByOutputIndex: make(map[int]*FunctionCallStreamState),
 	}
-}
-
-// --- Models Types ---
-
-// ModelsListResponse is the response from the /models endpoint.
-type ModelsListResponse struct {
-	Data []ModelInfo `json:"data"`
-}
-
-// ModelInfo contains model metadata including supported endpoints.
-type ModelInfo struct {
-	ID                 string   `json:"id"`
-	SupportedEndpoints []string `json:"supported_endpoints"`
 }

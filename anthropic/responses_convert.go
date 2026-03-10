@@ -227,9 +227,6 @@ func createResponsesReasoningItem(block AnthropicContentBlock) ResponseInputItem
 	}
 
 	thinking := block.Thinking
-	if thinking == ThinkingText {
-		thinking = ""
-	}
 
 	var summary *[]ResponseSummaryBlock
 	if thinking != "" {
@@ -393,13 +390,12 @@ func mapResponsesOutputToAnthropicContent(output []ResponseOutputItem) []Anthrop
 		switch item.Type {
 		case "reasoning":
 			thinkingText := extractResponsesReasoningText(item)
-			if thinkingText != "" {
-				blocks = append(blocks, AnthropicContentBlock{
-					Type:      "thinking",
-					Thinking:  thinkingText,
-					Signature: (item.EncryptedContent) + "@" + item.ID,
-				})
-			}
+			signature := item.EncryptedContent + "@" + item.ID
+			blocks = append(blocks, AnthropicContentBlock{
+				Type:      "thinking",
+				Thinking:  thinkingText,
+				Signature: signature,
+			})
 		case "function_call":
 			if item.Name != "" && item.CallID != "" {
 				input := parseResponsesFunctionCallArguments(item.Arguments)
@@ -434,7 +430,7 @@ func mapResponsesOutputToAnthropicContent(output []ResponseOutputItem) []Anthrop
 
 func extractResponsesReasoningText(item ResponseOutputItem) string {
 	if len(item.Summary) == 0 {
-		return ThinkingText
+		return ""
 	}
 	var parts []string
 	for _, block := range item.Summary {
@@ -442,11 +438,7 @@ func extractResponsesReasoningText(item ResponseOutputItem) string {
 			parts = append(parts, block.Text)
 		}
 	}
-	text := strings.TrimSpace(strings.Join(parts, ""))
-	if text == "" {
-		return ThinkingText
-	}
-	return text
+	return strings.TrimSpace(strings.Join(parts, ""))
 }
 
 func combineResponsesMessageTextContent(content []ResponseOutputContent) string {

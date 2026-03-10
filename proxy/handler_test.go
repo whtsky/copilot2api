@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whtsky/copilot2api/internal/cache"
 	"github.com/whtsky/copilot2api/internal/copilot"
+	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/internal/upstream"
 )
 
@@ -27,14 +27,14 @@ func TestAddCopilotHeaders(t *testing.T) {
 
 	// Test required headers
 	expectedHeaders := map[string]string{
-		"Authorization":       "Bearer " + token,
-		"User-Agent":          "GitHubCopilotChat/0.26.7",
-		"Editor-Version":      "vscode/1.96.2",
-		"Editor-Plugin-Version": "copilot-chat/0.26.7",
+		"Authorization":         "Bearer " + token,
+		"User-Agent":            copilot.CopilotUserAgent,
+		"Editor-Version":        copilot.EditorVersion,
+		"Editor-Plugin-Version": copilot.EditorPluginVersion,
 		"Copilot-Integration-Id": "vscode-chat",
-		"Openai-Intent":       "conversation-agent",
-		"Content-Type":        "application/json",
-		"X-Github-Api-Version": "2025-04-01",
+		"Openai-Intent":         "conversation-agent",
+		"Content-Type":          "application/json",
+		"X-Github-Api-Version":  "2025-04-01",
 	}
 
 	for header, expectedValue := range expectedHeaders {
@@ -140,12 +140,11 @@ func TestHandler_ServeHTTP_Routing(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
+	uc := upstream.NewClient(tp, nil)
 	handler := &Handler{
-		upstream:    upstream.NewClient(tp, nil),
-		modelsCache: cache.New[[]byte](5 * time.Minute),
+		upstream:    uc,
+		modelsCache: models.NewCache(uc, 5*time.Minute),
 	}
-
-	// /v1/models should return 200
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -178,9 +177,10 @@ func TestHandler_HandleModels(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
+	uc := upstream.NewClient(tp, nil)
 	handler := &Handler{
-		upstream:    upstream.NewClient(tp, nil),
-		modelsCache: cache.New[[]byte](5 * time.Minute),
+		upstream:    uc,
+		modelsCache: models.NewCache(uc, 5*time.Minute),
 	}
 
 	req := httptest.NewRequest("GET", "/v1/models", nil)
@@ -219,9 +219,10 @@ func TestHandler_HandlePassthrough(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
+	uc := upstream.NewClient(tp, nil)
 	handler := &Handler{
-		upstream:    upstream.NewClient(tp, nil),
-		modelsCache: cache.New[[]byte](5 * time.Minute),
+		upstream:    uc,
+		modelsCache: models.NewCache(uc, 5*time.Minute),
 	}
 
 	body := `{"model":"gpt-4","messages":[],"stream":false}`

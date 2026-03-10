@@ -96,7 +96,7 @@ func respHandleOutputItemAdded(event ResponseStreamEvent, state *ResponsesStream
 		events = append(events, AnthropicStreamEvent{
 			Type:  "content_block_delta",
 			Index: intPtr(blockIndex),
-			Delta: &AnthropicContentBlockDelta{
+			Delta: &AnthropicContentDelta{
 				Type:        "input_json_delta",
 				PartialJSON: initialArgs,
 			},
@@ -118,14 +118,15 @@ func respHandleOutputItemDone(event ResponseStreamEvent, state *ResponsesStreamS
 
 	signature := event.Item.EncryptedContent + "@" + event.Item.ID
 
-	// Compatible with opencode: add default thinking text if no summary
+	// If no summary text was streamed, emit an empty thinking delta so the
+	// block has at least one delta event (required before signature_delta).
 	if len(event.Item.Summary) == 0 {
 		events = append(events, AnthropicStreamEvent{
 			Type:  "content_block_delta",
 			Index: intPtr(blockIndex),
-			Delta: &AnthropicContentBlockDelta{
+			Delta: &AnthropicContentDelta{
 				Type:     "thinking_delta",
-				Thinking: ThinkingText,
+				Thinking: "",
 			},
 		})
 	}
@@ -133,7 +134,7 @@ func respHandleOutputItemDone(event ResponseStreamEvent, state *ResponsesStreamS
 	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_delta",
 		Index: intPtr(blockIndex),
-		Delta: &AnthropicContentBlockDelta{
+		Delta: &AnthropicContentDelta{
 			Type:      "signature_delta",
 			Signature: signature,
 		},
@@ -147,7 +148,7 @@ func respHandleReasoningSummaryTextDelta(event ResponseStreamEvent, state *Respo
 	opener := func(s *ResponsesStreamState, e *[]AnthropicStreamEvent) int {
 		return respOpenThinkingBlock(s, event.OutputIndex, e)
 	}
-	return respEmitDelta(state, event.Delta, opener, &AnthropicContentBlockDelta{
+	return respEmitDelta(state, event.Delta, opener, &AnthropicContentDelta{
 		Type:     "thinking_delta",
 		Thinking: event.Delta,
 	})
@@ -157,7 +158,7 @@ func respHandleReasoningSummaryTextDone(event ResponseStreamEvent, state *Respon
 	opener := func(s *ResponsesStreamState, e *[]AnthropicStreamEvent) int {
 		return respOpenThinkingBlock(s, event.OutputIndex, e)
 	}
-	return respEmitDone(state, event.Text, opener, &AnthropicContentBlockDelta{
+	return respEmitDone(state, event.Text, opener, &AnthropicContentDelta{
 		Type:     "thinking_delta",
 		Thinking: event.Text,
 	})
@@ -167,7 +168,7 @@ func respHandleOutputTextDelta(event ResponseStreamEvent, state *ResponsesStream
 	opener := func(s *ResponsesStreamState, e *[]AnthropicStreamEvent) int {
 		return respOpenTextBlock(s, event.OutputIndex, event.ContentIndex, e)
 	}
-	return respEmitDelta(state, event.Delta, opener, &AnthropicContentBlockDelta{
+	return respEmitDelta(state, event.Delta, opener, &AnthropicContentDelta{
 		Type: "text_delta",
 		Text: event.Delta,
 	})
@@ -177,7 +178,7 @@ func respHandleOutputTextDone(event ResponseStreamEvent, state *ResponsesStreamS
 	opener := func(s *ResponsesStreamState, e *[]AnthropicStreamEvent) int {
 		return respOpenTextBlock(s, event.OutputIndex, event.ContentIndex, e)
 	}
-	return respEmitDone(state, event.Text, opener, &AnthropicContentBlockDelta{
+	return respEmitDone(state, event.Text, opener, &AnthropicContentDelta{
 		Type: "text_delta",
 		Text: event.Text,
 	})
@@ -215,7 +216,7 @@ func respHandleFunctionCallArgsDelta(event ResponseStreamEvent, state *Responses
 	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_delta",
 		Index: intPtr(blockIndex),
-		Delta: &AnthropicContentBlockDelta{
+		Delta: &AnthropicContentDelta{
 			Type:        "input_json_delta",
 			PartialJSON: event.Delta,
 		},
@@ -229,7 +230,7 @@ func respHandleFunctionCallArgsDone(event ResponseStreamEvent, state *ResponsesS
 	opener := func(s *ResponsesStreamState, e *[]AnthropicStreamEvent) int {
 		return respOpenFunctionCallBlock(s, event.OutputIndex, "", "", e)
 	}
-	events := respEmitDone(state, event.Arguments, opener, &AnthropicContentBlockDelta{
+	events := respEmitDone(state, event.Arguments, opener, &AnthropicContentDelta{
 		Type:        "input_json_delta",
 		PartialJSON: event.Arguments,
 	})
@@ -246,7 +247,7 @@ func respHandleCompleted(event ResponseStreamEvent, state *ResponsesStreamState)
 		events = append(events,
 			AnthropicStreamEvent{
 				Type: "message_delta",
-				Delta: &AnthropicContentBlockDelta{
+				Delta: &AnthropicMessageDelta{
 					StopReason: anthropicResp.StopReason,
 				},
 				Usage: &AnthropicMessageDeltaUsage{OutputTokens: anthropicResp.Usage.OutputTokens},
@@ -257,7 +258,7 @@ func respHandleCompleted(event ResponseStreamEvent, state *ResponsesStreamState)
 		events = append(events,
 			AnthropicStreamEvent{
 				Type: "message_delta",
-				Delta: &AnthropicContentBlockDelta{
+				Delta: &AnthropicMessageDelta{
 					StopReason: "end_turn",
 				},
 				Usage: &AnthropicMessageDeltaUsage{OutputTokens: 0},
@@ -295,7 +296,7 @@ func respHandleError(event ResponseStreamEvent, state *ResponsesStreamState) []A
 	events = append(events,
 		AnthropicStreamEvent{
 			Type: "message_delta",
-			Delta: &AnthropicContentBlockDelta{
+			Delta: &AnthropicMessageDelta{
 				StopReason: "end_turn",
 			},
 			Usage: &AnthropicMessageDeltaUsage{OutputTokens: 0},
@@ -457,7 +458,7 @@ func respCloseAllOpenBlocks(state *ResponsesStreamState, events *[]AnthropicStre
 type blockOpener func(state *ResponsesStreamState, events *[]AnthropicStreamEvent) int
 
 // respEmitDelta is the generic delta handler: guard empty delta, open block, emit content_block_delta.
-func respEmitDelta(state *ResponsesStreamState, deltaText string, openBlock blockOpener, delta *AnthropicContentBlockDelta) []AnthropicStreamEvent {
+func respEmitDelta(state *ResponsesStreamState, deltaText string, openBlock blockOpener, delta interface{}) []AnthropicStreamEvent {
 	if deltaText == "" {
 		return nil
 	}
@@ -473,7 +474,7 @@ func respEmitDelta(state *ResponsesStreamState, deltaText string, openBlock bloc
 }
 
 // respEmitDone is the generic done handler: open block, emit fallback delta if no delta was seen.
-func respEmitDone(state *ResponsesStreamState, fallbackText string, openBlock blockOpener, delta *AnthropicContentBlockDelta) []AnthropicStreamEvent {
+func respEmitDone(state *ResponsesStreamState, fallbackText string, openBlock blockOpener, delta interface{}) []AnthropicStreamEvent {
 	var events []AnthropicStreamEvent
 	blockIndex := openBlock(state, &events)
 	if fallbackText != "" && !state.BlockHasDelta[blockIndex] {

@@ -64,6 +64,12 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
+### 1M Context Window
+
+copilot2api supports Claude 1M context models. When Claude Code sends the `anthropic-beta: context-1m-...` header, the proxy automatically appends `-1m` to the model ID (e.g. `claude-opus-4.6` → `claude-opus-4.6-1m`) so Copilot routes to the 1M variant.
+
+To use it, select the 1M model variant in Claude Code via the `/model` command (e.g. `Opus (1M)`). Without this, Claude Code defaults to the standard 200K context window.
+
 ## Usage with Codex
 
 Add to `~/.codex/config.toml`:

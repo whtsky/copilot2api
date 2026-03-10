@@ -1,9 +1,13 @@
 package anthropic
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/whtsky/copilot2api/internal/models"
+)
 
 func TestModelSupportsEndpoint_NormalizedV1Prefix(t *testing.T) {
-	info := &ModelInfo{SupportedEndpoints: []string{"/messages", "/responses"}}
+	info := &models.Info{SupportedEndpoints: []string{"/messages", "/responses"}}
 
 	if !modelSupportsEndpoint(info, "/v1/messages") {
 		t.Fatal("expected /v1/messages to match /messages")
@@ -23,27 +27,50 @@ func TestResolveModelAlias(t *testing.T) {
 		input string
 		want  string
 	}{
-		// Explicit aliases
+		// Hyphen-separated versions are normalized to dots
 		{"claude-opus-4-6", "claude-opus-4.6"},
 		{"claude-opus-4-6-fast", "claude-opus-4.6-fast"},
 		{"claude-sonnet-4-6", "claude-sonnet-4.6"},
 		{"claude-haiku-4-5", "claude-haiku-4.5"},
 		{"claude-opus-4-5", "claude-opus-4.5"},
 		{"claude-sonnet-4-5", "claude-sonnet-4.5"},
-		// Date-suffix aliases
+
+		// Date suffixes are stripped, then version normalization applied
 		{"claude-haiku-4-5-20251001", "claude-haiku-4.5"},
 		{"claude-haiku-4.5-20251001", "claude-haiku-4.5"},
 		{"claude-sonnet-4-20250514", "claude-sonnet-4"},
+		{"claude-opus-4-6-20250514", "claude-opus-4.6"},
+		{"claude-opus-4.6-20250514", "claude-opus-4.6"},
+		{"claude-sonnet-4-6-20250514", "claude-sonnet-4.6"},
+		{"claude-sonnet-4.6-20250514", "claude-sonnet-4.6"},
+		{"claude-sonnet-4-5-20250514", "claude-sonnet-4.5"},
+		{"claude-opus-4-5-20250514", "claude-opus-4.5"},
+		{"claude-opus-4.5-20250514", "claude-opus-4.5"},
+
+		// Non-obvious mapping via explicit alias
+		{"claude-opus-4-20250514", "claude-opus-4.5"},
+
+		// Future models: should work automatically without new explicit aliases
+		{"claude-opus-4-7-20260101", "claude-opus-4.7"},
+		{"claude-sonnet-5-0-20260601", "claude-sonnet-5.0"},
+
 		// Generic normalizer: unknown model with hyphen version
 		{"claude-sonnet-4-6-fast", "claude-sonnet-4.6-fast"},
+
 		// Already canonical — no change
 		{"claude-opus-4.6", "claude-opus-4.6"},
 		{"claude-sonnet-4", "claude-sonnet-4"},
+
 		// No version numbers to normalize
 		{"claude-sonnet", "claude-sonnet"},
+
 		// Hyphenated dates must NOT be corrupted
 		{"claude-sonnet-4-2025-04-14", "claude-sonnet-4-2025-04-14"},
 		{"claude-3-5-sonnet-2025-04-14", "claude-3.5-sonnet-2025-04-14"},
+
+		// Non-Claude models pass through unchanged
+		{"gpt-5.3-codex", "gpt-5.3-codex"},
+		{"gpt-5.4", "gpt-5.4"},
 	}
 
 	for _, tt := range tests {

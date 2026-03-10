@@ -11,9 +11,9 @@ import (
 
 // Exported constants for User-Agent and version headers.
 const (
-	CopilotUserAgent    = "GitHubCopilotChat/0.26.7"
-	EditorVersion       = "vscode/1.96.2"
-	EditorPluginVersion = "copilot-chat/0.26.7"
+	CopilotUserAgent    = "GitHubCopilotChat/0.39.0"
+	EditorVersion       = "vscode/1.111.0"
+	EditorPluginVersion = "copilot-chat/0.39.0"
 )
 
 // AddHeaders adds required Copilot headers to the request

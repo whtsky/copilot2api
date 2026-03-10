@@ -137,7 +137,7 @@ func handleThinkingText(delta OpenAIMessage, state *StreamState) []AnthropicStre
 	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_delta",
 		Index: intPtr(state.ContentBlockIndex),
-		Delta: &AnthropicContentBlockDelta{
+		Delta: &AnthropicContentDelta{
 			Type:     "thinking_delta",
 			Thinking: reasoningText,
 		},
@@ -186,7 +186,7 @@ func handleContent(delta OpenAIMessage, state *StreamState) []AnthropicStreamEve
 	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_delta",
 		Index: intPtr(state.ContentBlockIndex),
-		Delta: &AnthropicContentBlockDelta{
+		Delta: &AnthropicContentDelta{
 			Type: "text_delta",
 			Text: content,
 		},
@@ -271,7 +271,7 @@ func handleToolCalls(delta OpenAIMessage, state *StreamState) []AnthropicStreamE
 				events = append(events, AnthropicStreamEvent{
 					Type:  "content_block_delta",
 					Index: &toolCallState.AnthropicBlockIndex,
-					Delta: &AnthropicContentBlockDelta{
+					Delta: &AnthropicContentDelta{
 						Type:        "input_json_delta",
 						PartialJSON: toolCall.Function.Arguments,
 					},
@@ -328,7 +328,7 @@ func handleFinish(choice OpenAIChunkChoice, chunk OpenAIChatCompletionChunk, sta
 	// Send message delta
 	events = append(events, AnthropicStreamEvent{
 		Type: "message_delta",
-		Delta: &AnthropicContentBlockDelta{
+		Delta: &AnthropicMessageDelta{
 			StopReason: mapOpenAIFinishReasonToAnthropic(choice.FinishReason),
 		},
 		Usage: &AnthropicMessageDeltaUsage{OutputTokens: usage.OutputTokens},
@@ -360,15 +360,7 @@ func handleReasoningOpaque(delta OpenAIMessage, state *StreamState) []AnthropicS
 			AnthropicStreamEvent{
 				Type:  "content_block_delta",
 				Index: intPtr(state.ContentBlockIndex),
-				Delta: &AnthropicContentBlockDelta{
-					Type:     "thinking_delta",
-					Thinking: "Thinking...", // Default thinking text for compatibility
-				},
-			},
-			AnthropicStreamEvent{
-				Type:  "content_block_delta",
-				Index: intPtr(state.ContentBlockIndex),
-				Delta: &AnthropicContentBlockDelta{
+				Delta: &AnthropicContentDelta{
 					Type:      "signature_delta",
 					Signature: *delta.ReasoningOpaque,
 				},
@@ -389,14 +381,6 @@ func closeThinkingBlock(state *StreamState) []AnthropicStreamEvent {
 
 	if state.ThinkingBlockOpen {
 		events = append(events,
-			AnthropicStreamEvent{
-				Type:  "content_block_delta",
-				Index: intPtr(state.ContentBlockIndex),
-				Delta: &AnthropicContentBlockDelta{
-					Type:      "signature_delta",
-					Signature: "",
-				},
-			},
 			AnthropicStreamEvent{
 				Type:  "content_block_stop",
 				Index: intPtr(state.ContentBlockIndex),

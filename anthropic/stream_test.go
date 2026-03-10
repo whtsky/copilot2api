@@ -105,12 +105,13 @@ func TestConvertOpenAIChunkToAnthropicEvents_TextContent(t *testing.T) {
 		t.Errorf("Expected second event type 'content_block_delta', got %q", deltaEvent.Type)
 	}
 
-	if deltaEvent.Delta == nil || deltaEvent.Delta.Type != "text_delta" {
+	cd := contentDelta(t, deltaEvent)
+	if cd.Type != "text_delta" {
 		t.Errorf("Expected text_delta")
 	}
 
-	if deltaEvent.Delta.Text != "Hello" {
-		t.Errorf("Expected text 'Hello', got %q", deltaEvent.Delta.Text)
+	if cd.Text != "Hello" {
+		t.Errorf("Expected text 'Hello', got %q", cd.Text)
 	}
 
 	// Check state
@@ -212,12 +213,13 @@ func TestConvertOpenAIChunkToAnthropicEvents_ToolCall(t *testing.T) {
 		t.Errorf("Expected event type 'content_block_delta', got %q", deltaEvent.Type)
 	}
 
-	if deltaEvent.Delta == nil || deltaEvent.Delta.Type != "input_json_delta" {
+	cd := contentDelta(t, deltaEvent)
+	if cd.Type != "input_json_delta" {
 		t.Errorf("Expected input_json_delta")
 	}
 
-	if deltaEvent.Delta.PartialJSON != `{"query":` {
-		t.Errorf("Expected partial JSON '{\"query\":', got %q", deltaEvent.Delta.PartialJSON)
+	if cd.PartialJSON != `{"query":` {
+		t.Errorf("Expected partial JSON '{\"query\":', got %q", cd.PartialJSON)
 	}
 }
 
@@ -263,12 +265,13 @@ func TestConvertOpenAIChunkToAnthropicEvents_ThinkingText(t *testing.T) {
 		t.Errorf("Expected second event type 'content_block_delta', got %q", deltaEvent.Type)
 	}
 
-	if deltaEvent.Delta == nil || deltaEvent.Delta.Type != "thinking_delta" {
+	cd := contentDelta(t, deltaEvent)
+	if cd.Type != "thinking_delta" {
 		t.Errorf("Expected thinking_delta")
 	}
 
-	if deltaEvent.Delta.Thinking != "Let me think about this..." {
-		t.Errorf("Expected thinking text 'Let me think about this...', got %q", deltaEvent.Delta.Thinking)
+	if cd.Thinking != "Let me think about this..." {
+		t.Errorf("Expected thinking text 'Let me think about this...', got %q", cd.Thinking)
 	}
 
 	// Check state

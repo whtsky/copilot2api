@@ -2,7 +2,6 @@ package anthropic
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/whtsky/copilot2api/internal/cache"
+	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/internal/sse"
 	"github.com/whtsky/copilot2api/internal/upstream"
 )
@@ -20,31 +19,28 @@ import (
 // Handler handles Anthropic Messages API requests
 type Handler struct {
 	upstream *upstream.Client
-	models   *cache.Cache[map[string]*ModelInfo]
+	models   *models.Cache
 }
 
 // NewHandler creates a new Anthropic handler.
 // The transport is used for upstream HTTP requests (pass nil to create a new one).
-func NewHandler(authClient upstream.TokenProvider, transport *http.Transport) *Handler {
+func NewHandler(authClient upstream.TokenProvider, transport *http.Transport, mc *models.Cache) *Handler {
 	return &Handler{
 		upstream: upstream.NewClient(authClient, transport),
-		models:   cache.New[map[string]*ModelInfo](5 * time.Minute),
+		models:   mc,
 	}
-}
-
-// WarmModels pre-populates the models cache to avoid cold-cache latency.
-func (h *Handler) WarmModels(ctx context.Context) {
-	_, _ = h.getModelInfo(ctx, "")
 }
 
 // ServeHTTP handles /v1/messages requests
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
 	if r.Method != "POST" {
 		WriteAnthropicError(w, http.StatusMethodNotAllowed, AnthropicErrorTypeInvalidRequest, "Method not allowed")
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB limit
+	r.Body = http.MaxBytesReader(w, r.Body, upstream.MaxRequestBody) // 10MB limit
 	reqBody, err := io.ReadAll(r.Body)
 	if err != nil {
 		WriteAnthropicError(w, http.StatusBadRequest, AnthropicErrorTypeInvalidRequest, fmt.Sprintf("Invalid request body: %v", err))
@@ -66,38 +62,50 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve model alias (e.g. claude-haiku-4-5-20251001 -> claude-haiku-4.5)
 	resolvedModel := resolveModelAlias(anthropicReq.Model)
-	if resolvedModel != anthropicReq.Model {
+
+	// Detect 1M context variant: Claude Code signals this via the anthropic-beta
+	// header (e.g. "context-1m-2025-08-07"). Copilot exposes these as separate
+	// model IDs with a "-1m" suffix (e.g. "claude-opus-4.6-1m"), so we append it.
+	if betaHeader := r.Header.Get("anthropic-beta"); betaHeader != "" {
+		if context1mRe.MatchString(betaHeader) && !strings.HasSuffix(resolvedModel, "-1m") {
+			slog.Debug("detected context-1m beta header, appending -1m suffix", "model", resolvedModel)
+			resolvedModel += "-1m"
+		}
+	}
+
+	modelChanged := resolvedModel != anthropicReq.Model
+	if modelChanged {
 		slog.Debug("resolved model alias", "from", anthropicReq.Model, "to", resolvedModel)
-		// Replace only the top-level "model" key via JSON round-trip to avoid
-		// accidentally mutating model names inside message content.
-		var raw map[string]json.RawMessage
-		if err := json.Unmarshal(reqBody, &raw); err != nil {
-			WriteAnthropicError(w, http.StatusBadRequest, AnthropicErrorTypeInvalidRequest, fmt.Sprintf("Invalid JSON: %v", err))
-			return
-		}
-		modelJSON, _ := json.Marshal(resolvedModel)
-		raw["model"] = modelJSON
-		reqBody, err = json.Marshal(raw)
-		if err != nil {
-			WriteAnthropicError(w, http.StatusInternalServerError, AnthropicErrorTypeAPI, "Failed to re-encode request")
-			return
-		}
 		anthropicReq.Model = resolvedModel
 	}
 
-	slog.Debug("anthropic request", "model", anthropicReq.Model, "stream", anthropicReq.Stream, "messages", len(anthropicReq.Messages))
+	route := "chat_completions" // default fallback
+	defer func() {
+		slog.Info("anthropic request", "endpoint", "/v1/messages", "model", anthropicReq.Model, "stream", anthropicReq.Stream, "messages", len(anthropicReq.Messages), "route", route, "duration_ms", time.Since(start).Milliseconds())
+	}()
 
 	modelInfo, capabilityFetchFailed := h.getModelInfo(r.Context(), anthropicReq.Model)
 
 	if modelSupportsEndpoint(modelInfo, "/v1/messages") {
-		slog.Debug("routing to native /v1/messages upstream", "model", anthropicReq.Model)
+		route = "native"
+		// Only re-encode the body for native passthrough (the only path that
+		// sends raw reqBody). Responses and Chat Completions paths use the
+		// parsed struct, so they skip this JSON round-trip.
+		if modelChanged {
+			newBody, err := replaceModelInBody(reqBody, resolvedModel)
+			if err != nil {
+				WriteAnthropicError(w, http.StatusBadRequest, AnthropicErrorTypeInvalidRequest, fmt.Sprintf("Invalid JSON: %v", err))
+				return
+			}
+			reqBody = newBody
+		}
 		h.handleNativeMessagesPassthrough(w, r, reqBody, anthropicReq.Stream)
 		return
 	}
 
 	// Route based on model capabilities
 	if modelSupportsEndpoint(modelInfo, "/responses") {
-		slog.Debug("routing to Responses API", "model", anthropicReq.Model)
+		route = "responses"
 		h.handleViaResponsesAPI(w, r, anthropicReq)
 		return
 	}
@@ -106,7 +114,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("failed to fetch model capabilities, falling back to Chat Completions", "model", anthropicReq.Model)
 	}
 
-	slog.Debug("routing to Chat Completions API", "model", anthropicReq.Model)
 	h.handleViaChatCompletions(w, r, anthropicReq)
 }
 
@@ -135,8 +142,8 @@ func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http
 				h.writeRawUpstreamError(w, upstreamErr)
 				return
 			}
-			slog.Error("native /messages streaming request failed", "error", err)
-			w.Header().Set("Content-Type", "text/event-stream")
+			upstream.LogRequestError("native /messages streaming request failed", err)
+			sse.BeginSSE(w)
 			w.WriteHeader(http.StatusBadGateway)
 			h.writeSSEError(w, "Upstream streaming request failed")
 			return
@@ -159,7 +166,11 @@ func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http
 					slog.Error("failed to write native /messages stream", "error", writeErr)
 					return
 				}
-				flusher.Flush()
+				// Flush at SSE event boundaries (blank lines) instead of every line
+				// to reduce syscall overhead while maintaining correct SSE delivery.
+				if isBlankSSELine(line) {
+					flusher.Flush()
+				}
 			}
 
 			if errors.Is(err, io.EOF) {
@@ -181,7 +192,7 @@ func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http
 			h.writeRawUpstreamError(w, upstreamErr)
 			return
 		}
-		slog.Error("native /messages request failed", "error", err)
+		upstream.LogRequestError("native /messages request failed", err)
 		WriteAnthropicError(w, http.StatusInternalServerError, AnthropicErrorTypeAPI, "Upstream request failed")
 		return
 	}
@@ -216,7 +227,7 @@ func (h *Handler) handleNonStreamingRequest(w http.ResponseWriter, r *http.Reque
 			h.handleUpstreamError(w, upstreamErr)
 			return
 		}
-		slog.Error("upstream request failed", "error", err)
+		upstream.LogRequestError("upstream request failed", err)
 		WriteAnthropicError(w, http.StatusInternalServerError, AnthropicErrorTypeAPI, "Upstream request failed")
 		return
 	}
@@ -250,7 +261,7 @@ func (h *Handler) handleStreamingRequest(w http.ResponseWriter, r *http.Request,
 			h.handleUpstreamError(w, upstreamErr)
 			return
 		}
-		slog.Error("upstream streaming request failed", "error", err)
+		upstream.LogRequestError("upstream streaming request failed", err)
 		WriteAnthropicError(w, http.StatusInternalServerError, AnthropicErrorTypeAPI, "Upstream streaming request failed")
 		return
 	}
@@ -264,8 +275,6 @@ func (h *Handler) handleStreamingRequest(w http.ResponseWriter, r *http.Request,
 			slog.Warn("failed to parse OpenAI chunk", "error", err, "data", truncate(event.Data, 200))
 			return nil, false, nil
 		}
-
-		slog.Debug("chat completions stream chunk", "id", chunk.ID, "choices", len(chunk.Choices))
 
 		events, err := ConvertOpenAIChunkToAnthropicEvents(chunk, state)
 		if err != nil {
@@ -309,7 +318,7 @@ func (h *Handler) handleResponsesNonStreaming(w http.ResponseWriter, r *http.Req
 			h.handleUpstreamError(w, upstreamErr)
 			return
 		}
-		slog.Error("responses upstream request failed", "error", err)
+		upstream.LogRequestError("responses upstream request failed", err)
 		WriteAnthropicError(w, http.StatusInternalServerError, AnthropicErrorTypeAPI, "Upstream request failed")
 		return
 	}
@@ -340,7 +349,7 @@ func (h *Handler) handleResponsesStreaming(w http.ResponseWriter, r *http.Reques
 			h.handleUpstreamError(w, upstreamErr)
 			return
 		}
-		slog.Error("responses streaming request failed", "error", err)
+		upstream.LogRequestError("responses streaming request failed", err)
 		WriteAnthropicError(w, http.StatusInternalServerError, AnthropicErrorTypeAPI, "Upstream streaming request failed")
 		return
 	}
@@ -358,9 +367,9 @@ func (h *Handler) handleResponsesStreaming(w http.ResponseWriter, r *http.Reques
 			streamEvent.Type = event.Event
 		}
 
-		slog.Debug("responses stream event", "type", streamEvent.Type)
-
 		events := TranslateResponsesStreamEvent(streamEvent, state)
+
+		slog.Debug("responses stream event translated", "type", streamEvent.Type, "output_events", len(events))
 
 		return events, state.MessageCompleted, nil
 	})
@@ -425,11 +434,12 @@ func (h *Handler) streamSSE(w http.ResponseWriter, body io.Reader, translate sse
 		}
 
 		for _, event := range events {
-			slog.Debug("emitting anthropic event", "type", event.Type)
 			if err := h.writeSSEEvent(w, event); err != nil {
 				slog.Error("failed to write SSE event", "error", err)
 				return false
 			}
+		}
+		if len(events) > 0 {
 			flusher.Flush()
 		}
 
@@ -557,7 +567,7 @@ func (h *Handler) writeSSEEvent(w io.Writer, event AnthropicStreamEvent) error {
 		return fmt.Errorf("failed to marshal event: %w", err)
 	}
 
-	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, string(eventData))
+	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, eventData)
 	return err
 }
 
@@ -637,6 +647,30 @@ func (h *Handler) writeRawUpstreamError(w http.ResponseWriter, upstreamErr *upst
 func (h *Handler) handleUpstreamError(w http.ResponseWriter, upstreamErr *upstream.UpstreamError) {
 	anthropicErrorType, message := h.mapUpstreamError(upstreamErr)
 	WriteAnthropicError(w, upstreamErr.StatusCode, anthropicErrorType, message)
+}
+
+// replaceModelInBody replaces the top-level "model" key in a JSON body via a
+// targeted round-trip, preserving all other fields unchanged.
+func replaceModelInBody(body []byte, newModel string) ([]byte, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	modelJSON, _ := json.Marshal(newModel)
+	raw["model"] = modelJSON
+	return json.Marshal(raw)
+}
+
+// isBlankSSELine reports whether line consists solely of newline characters
+// (\r and/or \n). SSE uses blank lines to delimit events; flushing only at
+// these boundaries reduces syscall overhead while keeping delivery prompt.
+func isBlankSSELine(line []byte) bool {
+	for _, b := range line {
+		if b != '\r' && b != '\n' {
+			return false
+		}
+	}
+	return len(line) > 0
 }
 
 // truncate limits a string to maxLen characters for debug logging.

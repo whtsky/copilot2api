@@ -79,11 +79,9 @@ func (h *Handler) streamResponse(w http.ResponseWriter, body io.ReadCloser, endp
 
 		// Write the line
 		if _, err := io.WriteString(w, line); err != nil {
-			slog.Error("failed to write response line", "error", err)
 			return err
 		}
 		if _, err := io.WriteString(w, "\n"); err != nil {
-			slog.Error("failed to write response line", "error", err)
 			return err
 		}
 
@@ -96,7 +94,7 @@ func (h *Handler) streamResponse(w http.ResponseWriter, body io.ReadCloser, endp
 		// Skip this check for the Responses API — it uses event-based
 		// termination and may send data: [DONE] before response.completed.
 		if !isResponses && strings.TrimSpace(line) == "data: [DONE]" {
-			slog.Debug("chat completions stream done")
+			slog.Debug("stream done", "endpoint", endpoint)
 			if canFlush {
 				flusher.Flush()
 			}
@@ -105,16 +103,14 @@ func (h *Handler) streamResponse(w http.ResponseWriter, body io.ReadCloser, endp
 
 		// Responses API termination events
 		if isResponses && isResponsesTerminationEvent(line) {
-			slog.Debug("responses stream termination", "event", line)
+			slog.Debug("stream termination event", "endpoint", endpoint, "event", strings.TrimSpace(line))
 			// Write remaining data lines for this event, then stop
 			for scanner.Scan() {
 				remaining := scanner.Text()
 				if _, err := io.WriteString(w, remaining); err != nil {
-					slog.Error("failed to write response line", "error", err)
 					return err
 				}
 				if _, err := io.WriteString(w, "\n"); err != nil {
-					slog.Error("failed to write response line", "error", err)
 					return err
 				}
 				if remaining == "" {
@@ -129,7 +125,6 @@ func (h *Handler) streamResponse(w http.ResponseWriter, body io.ReadCloser, endp
 	}
 
 	if err := scanner.Err(); err != nil {
-		slog.Error("error reading upstream response", "error", err)
 		return err
 	}
 

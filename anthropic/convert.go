@@ -17,6 +17,11 @@ func ConvertAnthropicToOpenAI(req AnthropicMessagesRequest) (OpenAIChatCompletio
 		Metadata:    req.Metadata,
 	}
 
+	// Request usage in streaming chunks so message_delta gets real output_tokens
+	if req.Stream {
+		openAIReq.StreamOptions = &OpenAIStreamOptions{IncludeUsage: true}
+	}
+
 	// Map thinking configuration
 	if req.Thinking != nil && req.Thinking.BudgetTokens != nil {
 		openAIReq.ThinkingBudget = req.Thinking.BudgetTokens
@@ -258,7 +263,7 @@ func convertAssistantMessageToOpenAI(msg AnthropicMessage) ([]OpenAIMessage, err
 		var signature string
 
 		for _, block := range thinkingBlocks {
-			if block.Thinking != "" && block.Thinking != "Thinking..." {
+			if block.Thinking != "" {
 				thinkingTexts = append(thinkingTexts, block.Thinking)
 			}
 			if block.Signature != "" {
@@ -394,50 +399,53 @@ func convertAnthropicToolChoiceToOpenAI(choice *AnthropicToolChoice) (interface{
 	}
 }
 
-// Convert OpenAI response to Anthropic response
+// Convert OpenAI response to Anthropic response.
+// The Copilot API may return split choices for Claude models: text content in
+// one choice and tool_calls in another. We merge all choices into a single
+// Anthropic message, picking the most significant finish_reason.
 func ConvertOpenAIToAnthropic(resp OpenAIChatCompletionsResponse) (AnthropicMessagesResponse, error) {
 	if len(resp.Choices) == 0 {
 		return AnthropicMessagesResponse{}, fmt.Errorf("no choices in OpenAI response")
 	}
 
-	choice := resp.Choices[0]
 	var contentBlocks []AnthropicContentBlock
+	bestFinishReason := ""
 
-	// Handle thinking blocks first (from reasoning fields)
-	if choice.Message.ReasoningText != nil && *choice.Message.ReasoningText != "" {
-		signature := ""
-		if choice.Message.ReasoningOpaque != nil {
-			signature = *choice.Message.ReasoningOpaque
+	for _, choice := range resp.Choices {
+		// Handle thinking blocks (from reasoning fields)
+		if choice.Message.ReasoningText != nil && *choice.Message.ReasoningText != "" {
+			signature := ""
+			if choice.Message.ReasoningOpaque != nil {
+				signature = *choice.Message.ReasoningOpaque
+			}
+
+			contentBlocks = append(contentBlocks, AnthropicContentBlock{
+				Type:      "thinking",
+				Thinking:  *choice.Message.ReasoningText,
+				Signature: signature,
+			})
 		}
 
-		contentBlocks = append(contentBlocks, AnthropicContentBlock{
-			Type:      "thinking",
-			Thinking:  *choice.Message.ReasoningText,
-			Signature: signature,
-		})
-	}
-
-	// Handle text content
-	if choice.Message.Content != nil {
-		if choice.Message.Content.Text != nil && *choice.Message.Content.Text != "" {
-			contentBlocks = append(contentBlocks, AnthropicContentBlock{
-				Type: "text",
-				Text: *choice.Message.Content.Text,
-			})
-		} else if len(choice.Message.Content.Parts) > 0 {
-			for _, part := range choice.Message.Content.Parts {
-				if part.Type == "text" {
-					contentBlocks = append(contentBlocks, AnthropicContentBlock{
-						Type: "text",
-						Text: part.Text,
-					})
+		// Handle text content
+		if choice.Message.Content != nil {
+			if choice.Message.Content.Text != nil && *choice.Message.Content.Text != "" {
+				contentBlocks = append(contentBlocks, AnthropicContentBlock{
+					Type: "text",
+					Text: *choice.Message.Content.Text,
+				})
+			} else if len(choice.Message.Content.Parts) > 0 {
+				for _, part := range choice.Message.Content.Parts {
+					if part.Type == "text" {
+						contentBlocks = append(contentBlocks, AnthropicContentBlock{
+							Type: "text",
+							Text: part.Text,
+						})
+					}
 				}
 			}
 		}
-	}
 
-	// Handle tool calls
-	if len(choice.Message.ToolCalls) > 0 {
+		// Handle tool calls
 		for _, toolCall := range choice.Message.ToolCalls {
 			var input map[string]interface{}
 			if toolCall.Function.Arguments != "" {
@@ -456,6 +464,9 @@ func ConvertOpenAIToAnthropic(resp OpenAIChatCompletionsResponse) (AnthropicMess
 				Input: input,
 			})
 		}
+
+		// Track the most significant finish_reason: tool_calls > stop > others
+		bestFinishReason = pickFinishReason(bestFinishReason, choice.FinishReason)
 	}
 
 	// If no content blocks, add empty text block
@@ -467,7 +478,7 @@ func ConvertOpenAIToAnthropic(resp OpenAIChatCompletionsResponse) (AnthropicMess
 	}
 
 	// Map finish reason
-	stopReason := mapOpenAIFinishReasonToAnthropic(choice.FinishReason)
+	stopReason := mapOpenAIFinishReasonToAnthropic(bestFinishReason)
 
 	// Calculate usage
 	usage := AnthropicUsage{}
@@ -490,6 +501,27 @@ func ConvertOpenAIToAnthropic(resp OpenAIChatCompletionsResponse) (AnthropicMess
 		StopReason: stopReason,
 		Usage:      usage,
 	}, nil
+}
+
+// pickFinishReason returns the more significant of two finish reasons.
+// Priority: "tool_calls" > "stop" > "length" > any other non-empty > empty.
+func pickFinishReason(current, candidate string) string {
+	if current == "" {
+		return candidate
+	}
+	if candidate == "" {
+		return current
+	}
+	priority := map[string]int{
+		"tool_calls":     3,
+		"stop":           2,
+		"length":         1,
+		"content_filter": 0,
+	}
+	if priority[candidate] > priority[current] {
+		return candidate
+	}
+	return current
 }
 
 func mapOpenAIFinishReasonToAnthropic(reason string) string {

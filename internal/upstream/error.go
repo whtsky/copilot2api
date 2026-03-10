@@ -1,7 +1,10 @@
 package upstream
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 )
 
@@ -26,4 +29,20 @@ func (e *UpstreamError) WriteRawError(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(e.StatusCode)
 	_, _ = w.Write(e.Body)
+}
+
+// LogRequestError logs an upstream request failure at the appropriate level.
+// Client disconnects (context.Canceled) and timeouts (context.DeadlineExceeded)
+// are logged at Warn since they are normal operational events, not server errors.
+func LogRequestError(msg string, err error, extraArgs ...any) {
+	args := append([]any{"error", err}, extraArgs...)
+	if isContextError(err) {
+		slog.Warn(msg, args...)
+		return
+	}
+	slog.Error(msg, args...)
+}
+
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

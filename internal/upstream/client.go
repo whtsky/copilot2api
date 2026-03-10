@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -73,6 +72,7 @@ const (
 	defaultNonStreamTimeout = 5 * time.Minute
 	maxErrBody              = 1 << 20  // 1MB for error bodies
 	maxRespBody             = 50 << 20 // 50MB for response bodies
+	MaxRequestBody          = 10 << 20 // 10MB for incoming request bodies
 )
 
 // Do executes a request against the upstream Copilot API.
@@ -93,17 +93,14 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, []byte, err
 		// no body
 	case []byte:
 		bodyReader = bytes.NewReader(v)
-		slog.Debug("upstream request", "endpoint", r.Endpoint, "stream", r.Stream, "body_size", len(v))
 	case io.Reader:
 		bodyReader = v
-		slog.Debug("upstream request", "endpoint", r.Endpoint, "stream", r.Stream)
 	default:
 		data, err := json.Marshal(v)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to marshal request: %w", err)
 		}
 		bodyReader = bytes.NewReader(data)
-		slog.Debug("upstream request", "endpoint", r.Endpoint, "stream", r.Stream, "body_size", len(data))
 	}
 
 	// Build URL
