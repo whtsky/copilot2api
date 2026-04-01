@@ -25,12 +25,25 @@ type ResponsesRequest struct {
 	ParallelToolCalls bool                `json:"parallel_tool_calls"`
 	Reasoning         *ResponseReasoning  `json:"reasoning,omitempty"`
 	Include           []string            `json:"include,omitempty"`
+	Text              *ResponseText       `json:"text,omitempty"`
+	PreviousResponseID string             `json:"previous_response_id,omitempty"`
 }
 
 // ResponseReasoning configures reasoning behavior.
 type ResponseReasoning struct {
 	Effort  string `json:"effort"`
 	Summary string `json:"summary"`
+}
+
+// ResponseText configures text output format.
+type ResponseText struct {
+	Format ResponseTextFormat `json:"format"`
+}
+
+// ResponseTextFormat specifies the format type for text output.
+type ResponseTextFormat struct {
+	Type       string      `json:"type"`
+	JSONSchema interface{} `json:"json_schema,omitempty"`
 }
 
 // ResponseInputItem is a union struct representing all input item types:

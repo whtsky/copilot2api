@@ -23,6 +23,7 @@ type OpenAIChatCompletionsRequest struct {
 	ThinkingBudget    *int                       `json:"thinking_budget,omitempty"`
 	ReasoningText     *string                    `json:"reasoning_text,omitempty"`
 	ReasoningOpaque   *string                    `json:"reasoning_opaque,omitempty"`
+	ResponseFormat    *ResponseFormat            `json:"response_format,omitempty"`
 }
 
 // OpenAIStreamOptions controls streaming behavior options.
@@ -36,8 +37,9 @@ type OpenAIMessage struct {
 	Name           string              `json:"name,omitempty"`
 	ToolCalls      []OpenAIToolCall    `json:"tool_calls,omitempty"`
 	ToolCallID     string              `json:"tool_call_id,omitempty"`
-	ReasoningText  *string             `json:"reasoning_text,omitempty"`
-	ReasoningOpaque *string            `json:"reasoning_opaque,omitempty"`
+	ReasoningText   *string             `json:"reasoning_text,omitempty"`
+	ReasoningOpaque *string             `json:"reasoning_opaque,omitempty"`
+	ReasoningItems  []ReasoningItem     `json:"reasoning_items,omitempty"`
 }
 
 // OpenAIContent can be string or []OpenAIContentPart
@@ -108,6 +110,26 @@ type OpenAIToolCall struct {
 type OpenAIToolCallFunction struct {
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"` // JSON string
+}
+
+// ResponseFormat represents the response_format field in Chat Completions.
+type ResponseFormat struct {
+	Type       string      `json:"type"`
+	JSONSchema interface{} `json:"json_schema,omitempty"`
+}
+
+// ReasoningItem preserves full reasoning structure including encrypted_content.
+type ReasoningItem struct {
+	ID               string             `json:"id"`
+	Type             string             `json:"type"` // "reasoning"
+	EncryptedContent string             `json:"encrypted_content,omitempty"`
+	Summary          []ReasoningSummary `json:"summary,omitempty"`
+}
+
+// ReasoningSummary represents a summary text block within a reasoning item.
+type ReasoningSummary struct {
+	Type string `json:"type"` // "summary_text"
+	Text string `json:"text"`
 }
 
 // OpenAI Response types

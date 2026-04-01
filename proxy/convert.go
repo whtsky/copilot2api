@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -21,7 +22,19 @@ func ConvertChatToResponsesRequest(req types.OpenAIChatCompletionsRequest) types
 		Store:    false,
 	}
 
-	// Convert messages to input items
+	// Extract system messages into instructions field
+	var systemTexts []string
+	for _, msg := range req.Messages {
+		if msg.Role == "system" && msg.Content != nil && msg.Content.Text != nil {
+			systemTexts = append(systemTexts, *msg.Content.Text)
+		}
+	}
+	if len(systemTexts) > 0 {
+		combined := strings.Join(systemTexts, " ")
+		result.Instructions = &combined
+	}
+
+	// Convert messages to input items (skips system messages)
 	result.Input = convertMessagesToInput(req.Messages)
 
 	// Convert tools
@@ -29,9 +42,9 @@ func ConvertChatToResponsesRequest(req types.OpenAIChatCompletionsRequest) types
 		result.Tools = convertChatToolsToResponsesTools(req.Tools)
 	}
 
-	// Convert tool_choice
+	// Convert tool_choice (normalize non-standard formats)
 	if req.ToolChoice != nil {
-		result.ToolChoice = req.ToolChoice
+		result.ToolChoice = normalizeToolChoice(req.ToolChoice)
 	}
 
 	// Convert parallel_tool_calls
@@ -59,6 +72,16 @@ func ConvertChatToResponsesRequest(req types.OpenAIChatCompletionsRequest) types
 		}
 	}
 
+	// response_format → text.format
+	if req.ResponseFormat != nil {
+		result.Text = &types.ResponseText{
+			Format: types.ResponseTextFormat{
+				Type:       req.ResponseFormat.Type,
+				JSONSchema: req.ResponseFormat.JSONSchema,
+			},
+		}
+	}
+
 	return result
 }
 
@@ -68,14 +91,8 @@ func convertMessagesToInput(messages []types.OpenAIMessage) []types.ResponseInpu
 	for _, msg := range messages {
 		switch msg.Role {
 		case "system":
-			// System messages become instructions via a system input item
-			if msg.Content != nil && msg.Content.Text != nil {
-				input = append(input, types.ResponseInputItem{
-					Type:    "message",
-					Role:    "system",
-					Content: *msg.Content.Text,
-				})
-			}
+			// System messages are handled by the caller (extracted into instructions)
+			continue
 		case "user":
 			input = append(input, convertUserMessageToInput(msg))
 		case "assistant":
@@ -136,6 +153,28 @@ func convertUserMessageToInput(msg types.OpenAIMessage) types.ResponseInputItem 
 
 func convertAssistantMessageToInput(msg types.OpenAIMessage) []types.ResponseInputItem {
 	var items []types.ResponseInputItem
+
+	// Emit reasoning items (preserving encrypted_content for multi-turn)
+	if len(msg.ReasoningItems) > 0 {
+		for _, ri := range msg.ReasoningItems {
+			item := types.ResponseInputItem{
+				Type:             "reasoning",
+				ID:               ri.ID,
+				EncryptedContent: ri.EncryptedContent,
+			}
+			if len(ri.Summary) > 0 {
+				summaryBlocks := make([]types.ResponseSummaryBlock, len(ri.Summary))
+				for i, s := range ri.Summary {
+					summaryBlocks[i] = types.ResponseSummaryBlock{
+						Type: s.Type,
+						Text: s.Text,
+					}
+				}
+				item.Summary = &summaryBlocks
+			}
+			items = append(items, item)
+		}
+	}
 
 	// Add the assistant message itself
 	item := types.ResponseInputItem{
@@ -208,6 +247,40 @@ func contentToString(content *types.OpenAIContent) string {
 	return ""
 }
 
+// normalizeToolChoice normalizes non-standard tool_choice formats.
+// Some clients (like Cursor IDE) send {"type": "auto"} instead of "auto".
+func normalizeToolChoice(toolChoice interface{}) interface{} {
+	// If it's already a string, pass through
+	if _, ok := toolChoice.(string); ok {
+		return toolChoice
+	}
+
+	// If it's a map, check the type field
+	m, ok := toolChoice.(map[string]interface{})
+	if !ok {
+		return toolChoice
+	}
+
+	typeVal, ok := m["type"].(string)
+	if !ok {
+		return toolChoice
+	}
+
+	switch typeVal {
+	case "auto":
+		return "auto"
+	case "none":
+		return "none"
+	case "required", "tool":
+		return "required"
+	case "function":
+		// Pass through as-is (has function name specifics)
+		return toolChoice
+	default:
+		return toolChoice
+	}
+}
+
 // ConvertResponsesResultToChatResponse converts a Responses API result
 // back to an OpenAI Chat Completions response.
 func ConvertResponsesResultToChatResponse(result types.ResponsesResult, model string) types.OpenAIChatCompletionsResponse {
@@ -247,7 +320,7 @@ func ConvertResponsesResultToChatResponse(result types.ResponsesResult, model st
 				},
 			})
 		case "reasoning":
-			// Map reasoning summary to reasoning_text
+			// Map reasoning summary to reasoning_text (backward compat)
 			if len(item.Summary) > 0 {
 				var summaryParts []string
 				for _, s := range item.Summary {
@@ -260,6 +333,19 @@ func ConvertResponsesResultToChatResponse(result types.ResponsesResult, model st
 					msg.ReasoningText = &combined
 				}
 			}
+			// Preserve full reasoning item (including encrypted_content)
+			ri := types.ReasoningItem{
+				ID:               item.ID,
+				Type:             "reasoning",
+				EncryptedContent: item.EncryptedContent,
+			}
+			for _, s := range item.Summary {
+				ri.Summary = append(ri.Summary, types.ReasoningSummary{
+					Type: s.Type,
+					Text: s.Text,
+				})
+			}
+			msg.ReasoningItems = append(msg.ReasoningItems, ri)
 		}
 	}
 
@@ -338,9 +424,9 @@ func ConvertResponsesToChatRequest(req types.ResponsesRequest) types.OpenAIChatC
 		result.Tools = convertResponsesToolsToChatTools(req.Tools)
 	}
 
-	// Convert tool_choice
+	// Convert tool_choice (normalize non-standard formats)
 	if req.ToolChoice != nil {
-		result.ToolChoice = req.ToolChoice
+		result.ToolChoice = normalizeToolChoice(req.ToolChoice)
 	}
 
 	// ParallelToolCalls
@@ -363,6 +449,19 @@ func ConvertResponsesToChatRequest(req types.ResponsesRequest) types.OpenAIChatC
 	if req.Reasoning != nil {
 		budget := effortToThinkingBudget(req.Reasoning.Effort)
 		result.ThinkingBudget = &budget
+	}
+
+	// text.format → response_format
+	if req.Text != nil {
+		result.ResponseFormat = &types.ResponseFormat{
+			Type:       req.Text.Format.Type,
+			JSONSchema: req.Text.Format.JSONSchema,
+		}
+	}
+
+	// previous_response_id: stateless proxy, log and ignore during conversion
+	if req.PreviousResponseID != "" {
+		slog.Debug("previous_response_id set during responses→chat conversion, ignoring (stateless proxy)", "previous_response_id", req.PreviousResponseID)
 	}
 
 	// Stream options

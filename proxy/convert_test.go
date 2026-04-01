@@ -52,12 +52,15 @@ func TestConvertChatToResponsesRequest_SystemMessage(t *testing.T) {
 
 	result := ConvertChatToResponsesRequest(req)
 
-	if len(result.Input) != 1 {
-		t.Fatalf("Input length = %d, want 1", len(result.Input))
+	// System messages should be extracted into instructions, not input items
+	if len(result.Input) != 0 {
+		t.Errorf("Input length = %d, want 0 (system messages go to instructions)", len(result.Input))
 	}
-	item := result.Input[0]
-	if item.Type != "message" || item.Role != "system" {
-		t.Errorf("type=%q role=%q, want message/system", item.Type, item.Role)
+	if result.Instructions == nil {
+		t.Fatal("Instructions should not be nil")
+	}
+	if *result.Instructions != "You are helpful" {
+		t.Errorf("Instructions = %q, want %q", *result.Instructions, "You are helpful")
 	}
 }
 
@@ -1347,4 +1350,397 @@ func TestMapChatFinishReasonToResponsesStatus(t *testing.T) {
 
 func strPtr(s string) *string {
 	return &s
+}
+
+// --- Task 1: System messages → instructions ---
+
+func TestConvertChatToResponsesRequest_MultipleSystemMessages(t *testing.T) {
+	sys1 := "You are helpful"
+	sys2 := "Be concise"
+	userText := "Hi"
+	req := types.OpenAIChatCompletionsRequest{
+		Model: "gpt-4",
+		Messages: []types.OpenAIMessage{
+			{Role: "system", Content: &types.OpenAIContent{Text: &sys1}},
+			{Role: "system", Content: &types.OpenAIContent{Text: &sys2}},
+			{Role: "user", Content: &types.OpenAIContent{Text: &userText}},
+		},
+	}
+
+	result := ConvertChatToResponsesRequest(req)
+
+	if result.Instructions == nil {
+		t.Fatal("Instructions should not be nil")
+	}
+	if *result.Instructions != "You are helpful Be concise" {
+		t.Errorf("Instructions = %q, want %q", *result.Instructions, "You are helpful Be concise")
+	}
+	// Only user message in input
+	if len(result.Input) != 1 {
+		t.Fatalf("Input length = %d, want 1", len(result.Input))
+	}
+	if result.Input[0].Role != "user" {
+		t.Errorf("Input[0].Role = %q, want user", result.Input[0].Role)
+	}
+}
+
+// --- Task 2: response_format / text.format ---
+
+func TestConvertChatToResponsesRequest_ResponseFormat(t *testing.T) {
+	req := types.OpenAIChatCompletionsRequest{
+		Model: "gpt-4",
+		ResponseFormat: &types.ResponseFormat{
+			Type: "json_object",
+		},
+	}
+
+	result := ConvertChatToResponsesRequest(req)
+
+	if result.Text == nil {
+		t.Fatal("Text should not be nil")
+	}
+	if result.Text.Format.Type != "json_object" {
+		t.Errorf("Text.Format.Type = %q, want json_object", result.Text.Format.Type)
+	}
+}
+
+func TestConvertChatToResponsesRequest_ResponseFormatJSONSchema(t *testing.T) {
+	schema := map[string]interface{}{"name": "my_schema", "schema": map[string]interface{}{"type": "object"}}
+	req := types.OpenAIChatCompletionsRequest{
+		Model: "gpt-4",
+		ResponseFormat: &types.ResponseFormat{
+			Type:       "json_schema",
+			JSONSchema: schema,
+		},
+	}
+
+	result := ConvertChatToResponsesRequest(req)
+
+	if result.Text == nil {
+		t.Fatal("Text should not be nil")
+	}
+	if result.Text.Format.Type != "json_schema" {
+		t.Errorf("Text.Format.Type = %q, want json_schema", result.Text.Format.Type)
+	}
+	if result.Text.Format.JSONSchema == nil {
+		t.Error("Text.Format.JSONSchema should not be nil")
+	}
+}
+
+func TestConvertResponsesToChatRequest_TextFormat(t *testing.T) {
+	req := types.ResponsesRequest{
+		Model: "gpt-4",
+		Text: &types.ResponseText{
+			Format: types.ResponseTextFormat{
+				Type: "json_object",
+			},
+		},
+	}
+
+	result := ConvertResponsesToChatRequest(req)
+
+	if result.ResponseFormat == nil {
+		t.Fatal("ResponseFormat should not be nil")
+	}
+	if result.ResponseFormat.Type != "json_object" {
+		t.Errorf("ResponseFormat.Type = %q, want json_object", result.ResponseFormat.Type)
+	}
+}
+
+func TestConvertResponsesToChatRequest_TextFormatJSONSchema(t *testing.T) {
+	schema := map[string]interface{}{"name": "test"}
+	req := types.ResponsesRequest{
+		Model: "gpt-4",
+		Text: &types.ResponseText{
+			Format: types.ResponseTextFormat{
+				Type:       "json_schema",
+				JSONSchema: schema,
+			},
+		},
+	}
+
+	result := ConvertResponsesToChatRequest(req)
+
+	if result.ResponseFormat == nil {
+		t.Fatal("ResponseFormat should not be nil")
+	}
+	if result.ResponseFormat.Type != "json_schema" {
+		t.Errorf("ResponseFormat.Type = %q, want json_schema", result.ResponseFormat.Type)
+	}
+	if result.ResponseFormat.JSONSchema == nil {
+		t.Error("ResponseFormat.JSONSchema should not be nil")
+	}
+}
+
+// --- Task 3: tool_choice normalize ---
+
+func TestNormalizeToolChoice_StringPassthrough(t *testing.T) {
+	result := normalizeToolChoice("auto")
+	if result != "auto" {
+		t.Errorf("got %v, want auto", result)
+	}
+}
+
+func TestNormalizeToolChoice_MapAuto(t *testing.T) {
+	result := normalizeToolChoice(map[string]interface{}{"type": "auto"})
+	if result != "auto" {
+		t.Errorf("got %v, want auto", result)
+	}
+}
+
+func TestNormalizeToolChoice_MapNone(t *testing.T) {
+	result := normalizeToolChoice(map[string]interface{}{"type": "none"})
+	if result != "none" {
+		t.Errorf("got %v, want none", result)
+	}
+}
+
+func TestNormalizeToolChoice_MapRequired(t *testing.T) {
+	result := normalizeToolChoice(map[string]interface{}{"type": "required"})
+	if result != "required" {
+		t.Errorf("got %v, want required", result)
+	}
+}
+
+func TestNormalizeToolChoice_MapTool(t *testing.T) {
+	result := normalizeToolChoice(map[string]interface{}{"type": "tool"})
+	if result != "required" {
+		t.Errorf("got %v, want required", result)
+	}
+}
+
+func TestNormalizeToolChoice_MapFunction(t *testing.T) {
+	input := map[string]interface{}{
+		"type":     "function",
+		"function": map[string]interface{}{"name": "my_func"},
+	}
+	result := normalizeToolChoice(input)
+	// Should pass through as-is
+	m, ok := result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map, got %T", result)
+	}
+	if m["type"] != "function" {
+		t.Errorf("type = %v, want function", m["type"])
+	}
+}
+
+func TestConvertChatToResponsesRequest_ToolChoiceNormalized(t *testing.T) {
+	// Simulate Cursor IDE sending {"type": "auto"}
+	req := types.OpenAIChatCompletionsRequest{
+		Model:      "gpt-4",
+		ToolChoice: map[string]interface{}{"type": "auto"},
+	}
+
+	result := ConvertChatToResponsesRequest(req)
+
+	if result.ToolChoice != "auto" {
+		t.Errorf("ToolChoice = %v, want auto", result.ToolChoice)
+	}
+}
+
+func TestConvertResponsesToChatRequest_ToolChoiceNormalized(t *testing.T) {
+	req := types.ResponsesRequest{
+		Model:      "gpt-4",
+		ToolChoice: map[string]interface{}{"type": "none"},
+	}
+
+	result := ConvertResponsesToChatRequest(req)
+
+	if result.ToolChoice != "none" {
+		t.Errorf("ToolChoice = %v, want none", result.ToolChoice)
+	}
+}
+
+// --- Task 4: previous_response_id ---
+
+func TestConvertResponsesToChatRequest_PreviousResponseID(t *testing.T) {
+	// Should not panic or error, just logs debug and ignores
+	req := types.ResponsesRequest{
+		Model:              "gpt-4",
+		PreviousResponseID: "resp_abc123",
+		Input: []types.ResponseInputItem{
+			{Type: "message", Role: "user", Content: "Hi"},
+		},
+	}
+
+	result := ConvertResponsesToChatRequest(req)
+
+	// Should still produce valid output
+	if len(result.Messages) != 1 {
+		t.Fatalf("Messages length = %d, want 1", len(result.Messages))
+	}
+}
+
+func TestPreviousResponseID_JSONRoundtrip(t *testing.T) {
+	req := types.ResponsesRequest{
+		Model:              "gpt-4",
+		PreviousResponseID: "resp_abc123",
+		Stream:             true,
+	}
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var decoded types.ResponsesRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if decoded.PreviousResponseID != "resp_abc123" {
+		t.Errorf("PreviousResponseID = %q, want resp_abc123", decoded.PreviousResponseID)
+	}
+}
+
+// --- Task 5: Reasoning encrypted_content roundtrip ---
+
+func TestConvertResponsesResultToChatResponse_ReasoningWithEncryptedContent(t *testing.T) {
+	result := types.ResponsesResult{
+		ID:     "resp_enc",
+		Status: "completed",
+		Output: []types.ResponseOutputItem{
+			{
+				Type:             "reasoning",
+				ID:               "rs_abc",
+				EncryptedContent: "encrypted_data_here",
+				Summary: []types.ResponseSummaryBlock{
+					{Type: "summary_text", Text: "Thinking..."},
+				},
+			},
+			{
+				Type: "message",
+				Content: []types.ResponseOutputContent{
+					{Type: "output_text", Text: "Answer"},
+				},
+			},
+		},
+	}
+
+	resp := ConvertResponsesResultToChatResponse(result, "gpt-4")
+
+	msg := resp.Choices[0].Message
+	// Should have reasoning_text (backward compat)
+	if msg.ReasoningText == nil || *msg.ReasoningText != "Thinking..." {
+		t.Errorf("ReasoningText = %v, want 'Thinking...'", msg.ReasoningText)
+	}
+	// Should have reasoning_items with encrypted_content
+	if len(msg.ReasoningItems) != 1 {
+		t.Fatalf("ReasoningItems length = %d, want 1", len(msg.ReasoningItems))
+	}
+	ri := msg.ReasoningItems[0]
+	if ri.ID != "rs_abc" {
+		t.Errorf("ReasoningItems[0].ID = %q, want rs_abc", ri.ID)
+	}
+	if ri.EncryptedContent != "encrypted_data_here" {
+		t.Errorf("EncryptedContent = %q, want encrypted_data_here", ri.EncryptedContent)
+	}
+	if ri.Type != "reasoning" {
+		t.Errorf("Type = %q, want reasoning", ri.Type)
+	}
+}
+
+func TestConvertChatToResponsesRequest_ReasoningItemsRoundtrip(t *testing.T) {
+	text := "Answer"
+	req := types.OpenAIChatCompletionsRequest{
+		Model: "gpt-4",
+		Messages: []types.OpenAIMessage{
+			{
+				Role:    "assistant",
+				Content: &types.OpenAIContent{Text: &text},
+				ReasoningItems: []types.ReasoningItem{
+					{
+						ID:               "rs_abc",
+						Type:             "reasoning",
+						EncryptedContent: "encrypted_data_here",
+						Summary: []types.ReasoningSummary{
+							{Type: "summary_text", Text: "Thinking..."},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := ConvertChatToResponsesRequest(req)
+
+	// Should have reasoning input item + assistant message
+	if len(result.Input) < 2 {
+		t.Fatalf("Input length = %d, want >= 2", len(result.Input))
+	}
+	// First should be reasoning item
+	ri := result.Input[0]
+	if ri.Type != "reasoning" {
+		t.Errorf("Input[0].Type = %q, want reasoning", ri.Type)
+	}
+	if ri.ID != "rs_abc" {
+		t.Errorf("Input[0].ID = %q, want rs_abc", ri.ID)
+	}
+	if ri.EncryptedContent != "encrypted_data_here" {
+		t.Errorf("Input[0].EncryptedContent = %q, want encrypted_data_here", ri.EncryptedContent)
+	}
+	// Second should be assistant message
+	if result.Input[1].Type != "message" || result.Input[1].Role != "assistant" {
+		t.Errorf("Input[1] type=%q role=%q, want message/assistant", result.Input[1].Type, result.Input[1].Role)
+	}
+}
+
+func TestReasoningEncryptedContent_FullRoundtrip(t *testing.T) {
+	// Simulate: Responses API result → Chat response → back to Responses request
+	// The encrypted_content should survive the roundtrip.
+
+	// Step 1: Responses result with encrypted_content
+	responsesResult := types.ResponsesResult{
+		ID:     "resp_rt",
+		Status: "completed",
+		Output: []types.ResponseOutputItem{
+			{
+				Type:             "reasoning",
+				ID:               "rs_123",
+				EncryptedContent: "secret_encrypted_blob",
+				Summary: []types.ResponseSummaryBlock{
+					{Type: "summary_text", Text: "I thought about it"},
+				},
+			},
+			{
+				Type: "message",
+				Content: []types.ResponseOutputContent{
+					{Type: "output_text", Text: "Here is my answer"},
+				},
+			},
+		},
+	}
+
+	// Step 2: Convert to Chat response
+	chatResp := ConvertResponsesResultToChatResponse(responsesResult, "gpt-4")
+
+	// Step 3: Build a new Chat request using the assistant message from the response
+	userText := "Follow up question"
+	chatReq := types.OpenAIChatCompletionsRequest{
+		Model: "gpt-4",
+		Messages: []types.OpenAIMessage{
+			chatResp.Choices[0].Message, // assistant with reasoning_items
+			{Role: "user", Content: &types.OpenAIContent{Text: &userText}},
+		},
+	}
+
+	// Step 4: Convert to Responses request
+	responsesReq := ConvertChatToResponsesRequest(chatReq)
+
+	// Verify encrypted_content survived
+	foundReasoning := false
+	for _, item := range responsesReq.Input {
+		if item.Type == "reasoning" {
+			foundReasoning = true
+			if item.EncryptedContent != "secret_encrypted_blob" {
+				t.Errorf("EncryptedContent = %q, want secret_encrypted_blob", item.EncryptedContent)
+			}
+			if item.ID != "rs_123" {
+				t.Errorf("ID = %q, want rs_123", item.ID)
+			}
+		}
+	}
+	if !foundReasoning {
+		t.Error("Expected reasoning input item with encrypted_content")
+	}
 }
