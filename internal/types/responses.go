@@ -22,7 +22,7 @@ type ResponsesRequest struct {
 	Metadata          map[string]string   `json:"metadata,omitempty"`
 	Stream            bool                `json:"stream"`
 	Store             bool                `json:"store"`
-	ParallelToolCalls bool                `json:"parallel_tool_calls"`
+	ParallelToolCalls *bool               `json:"parallel_tool_calls,omitempty"`
 	Reasoning         *ResponseReasoning  `json:"reasoning,omitempty"`
 	Include           []string            `json:"include,omitempty"`
 	Text              *ResponseText       `json:"text,omitempty"`

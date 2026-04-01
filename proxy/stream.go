@@ -241,15 +241,10 @@ func streamResponsesAsChatChunks(w http.ResponseWriter, body io.ReadCloser) erro
 		return err
 	}
 
-	// If we didn't see a termination event, send [DONE] anyway so the
-	// client doesn't hang waiting for more data.
+	// If we didn't see a termination event, return an error instead of
+	// silently completing — the upstream stream ended unexpectedly.
 	if !state.Finished {
-		if _, err := io.WriteString(w, "data: [DONE]\n\n"); err != nil {
-			return err
-		}
-		if canFlush {
-			flusher.Flush()
-		}
+		return fmt.Errorf("responses stream ended without terminal event")
 	}
 
 	return nil
@@ -329,6 +324,11 @@ func streamChatChunksAsResponsesEvents(w http.ResponseWriter, body io.ReadCloser
 
 	if err := scanner.Err(); err != nil {
 		return err
+	}
+
+	// If we reach EOF without seeing [DONE], the stream ended unexpectedly.
+	if !state.Finished {
+		return fmt.Errorf("chat completions stream ended without [DONE] sentinel")
 	}
 
 	return nil

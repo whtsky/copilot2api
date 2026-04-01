@@ -49,6 +49,8 @@ func ConvertAnthropicToResponses(req AnthropicMessagesRequest) (ResponsesRequest
 		maxOutputTokens = 12800
 	}
 
+	ptc := req.ToolChoice == nil || req.ToolChoice.DisableParallelCalls == nil || !*req.ToolChoice.DisableParallelCalls
+
 	result := ResponsesRequest{
 		Model:             req.Model,
 		Input:             input,
@@ -61,7 +63,7 @@ func ConvertAnthropicToResponses(req AnthropicMessagesRequest) (ResponsesRequest
 		Metadata:          req.Metadata,
 		Stream:            req.Stream,
 		Store:             false,
-		ParallelToolCalls: req.ToolChoice == nil || req.ToolChoice.DisableParallelCalls == nil || !*req.ToolChoice.DisableParallelCalls,
+		ParallelToolCalls: &ptc,
 		Reasoning:         &ResponseReasoning{Effort: resolveReasoningEffort(req.Thinking, req.OutputConfig), Summary: "detailed"},
 		Include:           []string{"reasoning.encrypted_content"},
 	}

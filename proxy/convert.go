@@ -42,14 +42,27 @@ func ConvertChatToResponsesRequest(req types.OpenAIChatCompletionsRequest) types
 		result.Tools = convertChatToolsToResponsesTools(req.Tools)
 	}
 
-	// Convert tool_choice (normalize non-standard formats)
+	// Convert tool_choice (Chat → Responses format)
 	if req.ToolChoice != nil {
-		result.ToolChoice = normalizeToolChoice(req.ToolChoice)
+		result.ToolChoice = chatToolChoiceToResponses(req.ToolChoice)
 	}
 
 	// Convert parallel_tool_calls
 	if req.ParallelToolCalls != nil {
-		result.ParallelToolCalls = *req.ParallelToolCalls
+		result.ParallelToolCalls = req.ParallelToolCalls
+	}
+
+	// Pass through user as metadata
+	if req.User != "" {
+		if result.Metadata == nil {
+			result.Metadata = make(map[string]string)
+		}
+		result.Metadata["user"] = req.User
+	}
+
+	// Log warning for unsupported stop sequences
+	if req.Stop != nil {
+		slog.Warn("stop sequences not supported in Responses API conversion, ignoring", "stop", req.Stop)
 	}
 
 	// Temperature — pass through as-is (pointer, nil = omit from JSON)
@@ -181,8 +194,27 @@ func convertAssistantMessageToInput(msg types.OpenAIMessage) []types.ResponseInp
 		Type: "message",
 		Role: "assistant",
 	}
-	if msg.Content != nil && msg.Content.Text != nil {
-		item.Content = *msg.Content.Text
+	if msg.Content != nil {
+		if msg.Content.Text != nil {
+			item.Content = *msg.Content.Text
+		} else if len(msg.Content.Parts) > 0 {
+			var contentItems []types.ResponseInputContent
+			for _, part := range msg.Content.Parts {
+				if part.Type == "text" {
+					contentItems = append(contentItems, types.ResponseInputContent{
+						Type: "output_text",
+						Text: part.Text,
+					})
+				}
+			}
+			if len(contentItems) > 0 {
+				item.Content = contentItems
+			} else {
+				item.Content = ""
+			}
+		} else {
+			item.Content = ""
+		}
 	} else {
 		item.Content = ""
 	}
@@ -247,26 +279,17 @@ func contentToString(content *types.OpenAIContent) string {
 	return ""
 }
 
-// normalizeToolChoice normalizes non-standard tool_choice formats.
-// Some clients (like Cursor IDE) send {"type": "auto"} instead of "auto".
-func normalizeToolChoice(toolChoice interface{}) interface{} {
-	// If it's already a string, pass through
-	if _, ok := toolChoice.(string); ok {
-		return toolChoice
+// chatToolChoiceToResponses converts Chat Completions tool_choice to Responses API format.
+func chatToolChoiceToResponses(v interface{}) interface{} {
+	if s, ok := v.(string); ok {
+		return s
 	}
-
-	// If it's a map, check the type field
-	m, ok := toolChoice.(map[string]interface{})
+	m, ok := v.(map[string]interface{})
 	if !ok {
-		return toolChoice
+		return v
 	}
-
-	typeVal, ok := m["type"].(string)
-	if !ok {
-		return toolChoice
-	}
-
-	switch typeVal {
+	typ, _ := m["type"].(string)
+	switch typ {
 	case "auto":
 		return "auto"
 	case "none":
@@ -274,11 +297,43 @@ func normalizeToolChoice(toolChoice interface{}) interface{} {
 	case "required", "tool":
 		return "required"
 	case "function":
-		// Pass through as-is (has function name specifics)
-		return toolChoice
-	default:
-		return toolChoice
+		if fn, ok := m["function"].(map[string]interface{}); ok {
+			if name, ok := fn["name"].(string); ok && name != "" {
+				return map[string]interface{}{"type": "function", "name": name}
+			}
+		}
+		return "required"
 	}
+	return v
+}
+
+// responsesToolChoiceToChat converts Responses API tool_choice to Chat Completions format.
+func responsesToolChoiceToChat(v interface{}) interface{} {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	m, ok := v.(map[string]interface{})
+	if !ok {
+		return v
+	}
+	typ, _ := m["type"].(string)
+	switch typ {
+	case "auto":
+		return "auto"
+	case "none":
+		return "none"
+	case "required", "tool":
+		return "required"
+	case "function":
+		if name, ok := m["name"].(string); ok && name != "" {
+			return map[string]interface{}{
+				"type":     "function",
+				"function": map[string]interface{}{"name": name},
+			}
+		}
+		return "required"
+	}
+	return v
 }
 
 // ConvertResponsesResultToChatResponse converts a Responses API result
@@ -424,14 +479,13 @@ func ConvertResponsesToChatRequest(req types.ResponsesRequest) types.OpenAIChatC
 		result.Tools = convertResponsesToolsToChatTools(req.Tools)
 	}
 
-	// Convert tool_choice (normalize non-standard formats)
+	// Convert tool_choice (Responses → Chat format)
 	if req.ToolChoice != nil {
-		result.ToolChoice = normalizeToolChoice(req.ToolChoice)
+		result.ToolChoice = responsesToolChoiceToChat(req.ToolChoice)
 	}
 
 	// ParallelToolCalls
-	parallelCalls := req.ParallelToolCalls
-	result.ParallelToolCalls = &parallelCalls
+	result.ParallelToolCalls = req.ParallelToolCalls
 
 	// Temperature — pass through as-is (pointer, nil = omit)
 	result.Temperature = req.Temperature
@@ -474,6 +528,7 @@ func ConvertResponsesToChatRequest(req types.ResponsesRequest) types.OpenAIChatC
 
 func convertInputToMessages(input []types.ResponseInputItem, instructions *string) []types.OpenAIMessage {
 	var messages []types.OpenAIMessage
+	var pendingReasoning []types.ReasoningItem
 
 	// Add instructions as system message
 	if instructions != nil && *instructions != "" {
@@ -485,12 +540,35 @@ func convertInputToMessages(input []types.ResponseInputItem, instructions *strin
 
 	for _, item := range input {
 		switch item.Type {
+		case "reasoning":
+			ri := types.ReasoningItem{
+				ID:               item.ID,
+				Type:             "reasoning",
+				EncryptedContent: item.EncryptedContent,
+			}
+			if item.Summary != nil {
+				for _, s := range *item.Summary {
+					ri.Summary = append(ri.Summary, types.ReasoningSummary{
+						Type: s.Type,
+						Text: s.Text,
+					})
+				}
+			}
+			pendingReasoning = append(pendingReasoning, ri)
+
 		case "message":
-			messages = append(messages, convertInputItemToMessage(item))
+			msg := convertInputItemToMessage(item)
+			if msg.Role == "assistant" && len(pendingReasoning) > 0 {
+				msg.ReasoningItems = pendingReasoning
+				pendingReasoning = nil
+			}
+			messages = append(messages, msg)
+
 		case "function_call":
 			// Becomes a tool_call on the previous assistant message
 			// or creates a new assistant message with the tool call
 			messages = appendFunctionCallAsToolCall(messages, item)
+
 		case "function_call_output":
 			outputStr := ""
 			if s, ok := item.Output.(string); ok {
@@ -505,6 +583,15 @@ func convertInputToMessages(input []types.ResponseInputItem, instructions *strin
 				Content:    &types.OpenAIContent{Text: &outputStr},
 			})
 		}
+	}
+
+	// If there are leftover reasoning items with no following assistant message,
+	// create one to carry them
+	if len(pendingReasoning) > 0 {
+		messages = append(messages, types.OpenAIMessage{
+			Role:           "assistant",
+			ReasoningItems: pendingReasoning,
+		})
 	}
 
 	return messages
@@ -947,10 +1034,28 @@ func responsesCompletedToChatChunk(event types.ResponseStreamEvent, state *Respo
 func responsesFailedToChatChunk(event types.ResponseStreamEvent, state *ResponsesStreamConvertState) []types.OpenAIChatCompletionChunk {
 	state.Finished = true
 
-	// Map response.failed / error to a "stop" finish with the content we have.
-	// Chat Completions doesn't have a "failed" finish reason, so we use "stop"
-	// and let the lack of content signal the failure to the client.
+	// Extract error message from the event
+	errMsg := "upstream request failed"
+	if event.Response != nil && event.Response.Error != nil && event.Response.Error.Message != "" {
+		errMsg = event.Response.Error.Message
+	} else if event.Message != "" {
+		errMsg = event.Message
+	}
+
+	// Emit a chunk with the error as content so the client sees something,
+	// then finish with "stop"
 	return []types.OpenAIChatCompletionChunk{{
+		ID:      state.ID,
+		Object:  "chat.completion.chunk",
+		Created: state.Created,
+		Model:   state.Model,
+		Choices: []types.OpenAIChunkChoice{{
+			Index: 0,
+			Delta: types.OpenAIMessage{
+				Content: &types.OpenAIContent{Text: &errMsg},
+			},
+		}},
+	}, {
 		ID:      state.ID,
 		Object:  "chat.completion.chunk",
 		Created: state.Created,

@@ -187,3 +187,57 @@ func TestHeadersSentError(t *testing.T) {
 		t.Fatal("errors.As should match *headersSentError")
 	}
 }
+
+// --- Issue 5: Stream EOF without terminal event ---
+
+func TestStreamResponsesAsChatChunks_NoTerminalEvent(t *testing.T) {
+	// Simulate a stream that ends without a terminal event
+	sseData := "event: response.created\n" +
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-4"}}` + "\n\n" +
+		"event: response.output_text.delta\n" +
+		`data: {"type":"response.output_text.delta","delta":"hello"}` + "\n\n"
+
+	rec := httptest.NewRecorder()
+	body := io.NopCloser(strings.NewReader(sseData))
+
+	err := streamResponsesAsChatChunks(rec, body)
+	if err == nil {
+		t.Fatal("expected error when stream ends without terminal event")
+	}
+	if !strings.Contains(err.Error(), "terminal event") {
+		t.Errorf("error should mention terminal event, got: %s", err.Error())
+	}
+}
+
+func TestStreamResponsesAsChatChunks_WithTerminalEvent(t *testing.T) {
+	// Normal stream with terminal event should succeed
+	sseData := "event: response.created\n" +
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-4"}}` + "\n\n" +
+		"event: response.completed\n" +
+		`data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-4","status":"completed"}}` + "\n\n"
+
+	rec := httptest.NewRecorder()
+	body := io.NopCloser(strings.NewReader(sseData))
+
+	err := streamResponsesAsChatChunks(rec, body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestStreamChatChunksAsResponsesEvents_NoTerminalEvent(t *testing.T) {
+	// Chat stream that ends without [DONE] should error
+	sseData := `data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-4","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-4","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}` + "\n\n"
+
+	rec := httptest.NewRecorder()
+	body := io.NopCloser(strings.NewReader(sseData))
+
+	err := streamChatChunksAsResponsesEvents(rec, body)
+	if err == nil {
+		t.Fatal("expected error when chat stream ends without [DONE]")
+	}
+	if !strings.Contains(err.Error(), "[DONE]") {
+		t.Errorf("error should mention [DONE], got: %s", err.Error())
+	}
+}

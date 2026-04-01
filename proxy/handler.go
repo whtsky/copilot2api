@@ -258,6 +258,16 @@ func (h *Handler) handleChatToResponsesNonStreaming(w http.ResponseWriter, r *ht
 		return
 	}
 
+	// Check for failed response
+	if responsesResult.Status == "failed" || responsesResult.Error != nil {
+		msg := "Upstream request failed"
+		if responsesResult.Error != nil && responsesResult.Error.Message != "" {
+			msg = responsesResult.Error.Message
+		}
+		WriteOpenAIError(w, http.StatusBadGateway, OpenAIErrorTypeServerError, msg)
+		return
+	}
+
 	chatResp := ConvertResponsesResultToChatResponse(responsesResult, chatReq.Model)
 	result, err := json.Marshal(chatResp)
 	if err != nil {

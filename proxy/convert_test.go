@@ -264,7 +264,7 @@ func TestConvertChatToResponsesRequest_ParallelToolCalls(t *testing.T) {
 
 	result := ConvertChatToResponsesRequest(req)
 
-	if !result.ParallelToolCalls {
+	if result.ParallelToolCalls == nil || !*result.ParallelToolCalls {
 		t.Error("ParallelToolCalls should be true")
 	}
 }
@@ -904,11 +904,16 @@ func TestConvertResponsesStreamEvent_Failed(t *testing.T) {
 	if !state.Finished {
 		t.Error("State should be Finished")
 	}
-	if len(chunks) != 1 {
-		t.Fatalf("chunks = %d, want 1", len(chunks))
+	if len(chunks) != 2 {
+		t.Fatalf("chunks = %d, want 2", len(chunks))
 	}
-	if chunks[0].Choices[0].FinishReason != "stop" {
-		t.Errorf("FinishReason = %q, want stop", chunks[0].Choices[0].FinishReason)
+	// First chunk should contain error message as content
+	if chunks[0].Choices[0].Delta.Content == nil {
+		t.Error("first chunk should have error content")
+	}
+	// Second chunk should have finish reason
+	if chunks[1].Choices[0].FinishReason != "stop" {
+		t.Errorf("FinishReason = %q, want stop", chunks[1].Choices[0].FinishReason)
 	}
 }
 
@@ -1472,56 +1477,63 @@ func TestConvertResponsesToChatRequest_TextFormatJSONSchema(t *testing.T) {
 	}
 }
 
-// --- Task 3: tool_choice normalize ---
+// --- Task 3: tool_choice direction-aware conversion ---
 
-func TestNormalizeToolChoice_StringPassthrough(t *testing.T) {
-	result := normalizeToolChoice("auto")
+func TestChatToolChoiceToResponses_StringPassthrough(t *testing.T) {
+	result := chatToolChoiceToResponses("auto")
 	if result != "auto" {
 		t.Errorf("got %v, want auto", result)
 	}
 }
 
-func TestNormalizeToolChoice_MapAuto(t *testing.T) {
-	result := normalizeToolChoice(map[string]interface{}{"type": "auto"})
+func TestChatToolChoiceToResponses_MapAuto(t *testing.T) {
+	result := chatToolChoiceToResponses(map[string]interface{}{"type": "auto"})
 	if result != "auto" {
 		t.Errorf("got %v, want auto", result)
 	}
 }
 
-func TestNormalizeToolChoice_MapNone(t *testing.T) {
-	result := normalizeToolChoice(map[string]interface{}{"type": "none"})
+func TestChatToolChoiceToResponses_MapNone(t *testing.T) {
+	result := chatToolChoiceToResponses(map[string]interface{}{"type": "none"})
 	if result != "none" {
 		t.Errorf("got %v, want none", result)
 	}
 }
 
-func TestNormalizeToolChoice_MapRequired(t *testing.T) {
-	result := normalizeToolChoice(map[string]interface{}{"type": "required"})
+func TestChatToolChoiceToResponses_MapRequired(t *testing.T) {
+	result := chatToolChoiceToResponses(map[string]interface{}{"type": "required"})
 	if result != "required" {
 		t.Errorf("got %v, want required", result)
 	}
 }
 
-func TestNormalizeToolChoice_MapTool(t *testing.T) {
-	result := normalizeToolChoice(map[string]interface{}{"type": "tool"})
+func TestChatToolChoiceToResponses_MapTool(t *testing.T) {
+	result := chatToolChoiceToResponses(map[string]interface{}{"type": "tool"})
 	if result != "required" {
 		t.Errorf("got %v, want required", result)
 	}
 }
 
-func TestNormalizeToolChoice_MapFunction(t *testing.T) {
+func TestChatToolChoiceToResponses_MapFunction(t *testing.T) {
 	input := map[string]interface{}{
 		"type":     "function",
 		"function": map[string]interface{}{"name": "my_func"},
 	}
-	result := normalizeToolChoice(input)
-	// Should pass through as-is
+	result := chatToolChoiceToResponses(input)
+	// Should convert to Responses API format: {"type":"function","name":"my_func"}
 	m, ok := result.(map[string]interface{})
 	if !ok {
 		t.Fatalf("expected map, got %T", result)
 	}
 	if m["type"] != "function" {
 		t.Errorf("type = %v, want function", m["type"])
+	}
+	if m["name"] != "my_func" {
+		t.Errorf("name = %v, want my_func", m["name"])
+	}
+	// Should NOT have nested "function" key
+	if _, hasFunc := m["function"]; hasFunc {
+		t.Error("should not have nested 'function' key in Responses format")
 	}
 }
 
@@ -1742,5 +1754,429 @@ func TestReasoningEncryptedContent_FullRoundtrip(t *testing.T) {
 	}
 	if !foundReasoning {
 		t.Error("Expected reasoning input item with encrypted_content")
+	}
+}
+
+// ============================================================
+// Tests for code review fixes (Issues 1-7)
+// ============================================================
+
+// --- Issue 1: tool_choice direction-aware conversion ---
+
+func TestChatToolChoiceToResponses_FunctionWithName(t *testing.T) {
+	// Chat format: {"type":"function","function":{"name":"foo"}}
+	input := map[string]interface{}{
+		"type":     "function",
+		"function": map[string]interface{}{"name": "get_weather"},
+	}
+	result := chatToolChoiceToResponses(input)
+	m, ok := result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map, got %T", result)
+	}
+	if m["type"] != "function" {
+		t.Errorf("type = %v, want function", m["type"])
+	}
+	if m["name"] != "get_weather" {
+		t.Errorf("name = %v, want get_weather", m["name"])
+	}
+	if _, has := m["function"]; has {
+		t.Error("Responses format should not have nested 'function' key")
+	}
+}
+
+func TestChatToolChoiceToResponses_FunctionWithoutName(t *testing.T) {
+	input := map[string]interface{}{
+		"type":     "function",
+		"function": map[string]interface{}{},
+	}
+	result := chatToolChoiceToResponses(input)
+	if result != "required" {
+		t.Errorf("function without name should fallback to 'required', got %v", result)
+	}
+}
+
+func TestResponsesToolChoiceToChat_FunctionWithName(t *testing.T) {
+	// Responses format: {"type":"function","name":"foo"}
+	input := map[string]interface{}{
+		"type": "function",
+		"name": "get_weather",
+	}
+	result := responsesToolChoiceToChat(input)
+	m, ok := result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map, got %T", result)
+	}
+	if m["type"] != "function" {
+		t.Errorf("type = %v, want function", m["type"])
+	}
+	fn, ok := m["function"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected nested 'function' map in Chat format")
+	}
+	if fn["name"] != "get_weather" {
+		t.Errorf("function.name = %v, want get_weather", fn["name"])
+	}
+}
+
+func TestResponsesToolChoiceToChat_FunctionWithoutName(t *testing.T) {
+	input := map[string]interface{}{
+		"type": "function",
+	}
+	result := responsesToolChoiceToChat(input)
+	if result != "required" {
+		t.Errorf("function without name should fallback to 'required', got %v", result)
+	}
+}
+
+func TestToolChoiceRoundTrip_ChatToResponsesAndBack(t *testing.T) {
+	// Start with Chat format
+	chatChoice := map[string]interface{}{
+		"type":     "function",
+		"function": map[string]interface{}{"name": "my_tool"},
+	}
+	responsesChoice := chatToolChoiceToResponses(chatChoice)
+	chatBack := responsesToolChoiceToChat(responsesChoice)
+
+	m, ok := chatBack.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map, got %T", chatBack)
+	}
+	fn, ok := m["function"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected nested function key")
+	}
+	if fn["name"] != "my_tool" {
+		t.Errorf("round-trip lost function name: got %v", fn["name"])
+	}
+}
+
+// --- Issue 2: reasoning items in Responses → Chat conversion ---
+
+func TestConvertInputToMessages_ReasoningAttachedToAssistant(t *testing.T) {
+	summaryBlocks := []types.ResponseSummaryBlock{
+		{Type: "summary_text", Text: "I thought about it"},
+	}
+	input := []types.ResponseInputItem{
+		{
+			Type:             "reasoning",
+			ID:               "r_1",
+			EncryptedContent: "enc123",
+			Summary:          &summaryBlocks,
+		},
+		{
+			Type:    "message",
+			Role:    "assistant",
+			Content: "Hello",
+		},
+	}
+	messages := convertInputToMessages(input, nil)
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+	if messages[0].Role != "assistant" {
+		t.Errorf("role = %s, want assistant", messages[0].Role)
+	}
+	if len(messages[0].ReasoningItems) != 1 {
+		t.Fatalf("expected 1 reasoning item, got %d", len(messages[0].ReasoningItems))
+	}
+	ri := messages[0].ReasoningItems[0]
+	if ri.ID != "r_1" {
+		t.Errorf("reasoning ID = %s, want r_1", ri.ID)
+	}
+	if ri.EncryptedContent != "enc123" {
+		t.Errorf("encrypted_content = %s, want enc123", ri.EncryptedContent)
+	}
+	if len(ri.Summary) != 1 || ri.Summary[0].Text != "I thought about it" {
+		t.Errorf("summary mismatch: %+v", ri.Summary)
+	}
+}
+
+func TestConvertInputToMessages_LeftoverReasoningCreatesAssistant(t *testing.T) {
+	summaryBlocks := []types.ResponseSummaryBlock{
+		{Type: "summary_text", Text: "thinking..."},
+	}
+	input := []types.ResponseInputItem{
+		{
+			Type:    "message",
+			Role:    "user",
+			Content: "Hi",
+		},
+		{
+			Type:             "reasoning",
+			ID:               "r_2",
+			EncryptedContent: "enc456",
+			Summary:          &summaryBlocks,
+		},
+	}
+	messages := convertInputToMessages(input, nil)
+	if len(messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(messages))
+	}
+	if messages[1].Role != "assistant" {
+		t.Errorf("leftover reasoning should create assistant message, got role=%s", messages[1].Role)
+	}
+	if len(messages[1].ReasoningItems) != 1 {
+		t.Fatalf("expected 1 reasoning item on created assistant, got %d", len(messages[1].ReasoningItems))
+	}
+}
+
+func TestConvertInputToMessages_ReasoningNotAttachedToUser(t *testing.T) {
+	summaryBlocks := []types.ResponseSummaryBlock{
+		{Type: "summary_text", Text: "thinking"},
+	}
+	input := []types.ResponseInputItem{
+		{
+			Type:    "reasoning",
+			ID:      "r_3",
+			Summary: &summaryBlocks,
+		},
+		{
+			Type:    "message",
+			Role:    "user",
+			Content: "Hello",
+		},
+	}
+	messages := convertInputToMessages(input, nil)
+	// Reasoning should NOT attach to user message; should create a separate assistant message
+	if len(messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(messages))
+	}
+	if messages[0].Role != "user" {
+		t.Errorf("first message role = %s, want user", messages[0].Role)
+	}
+	if len(messages[0].ReasoningItems) != 0 {
+		t.Error("reasoning should not be attached to user message")
+	}
+	// Leftover reasoning creates assistant
+	if messages[1].Role != "assistant" {
+		t.Errorf("second message role = %s, want assistant", messages[1].Role)
+	}
+	if len(messages[1].ReasoningItems) != 1 {
+		t.Error("expected reasoning on created assistant message")
+	}
+}
+
+// --- Issue 3: Assistant multipart content in Chat → Responses ---
+
+func TestConvertAssistantMessageToInput_MultipartContent(t *testing.T) {
+	msg := types.OpenAIMessage{
+		Role: "assistant",
+		Content: &types.OpenAIContent{
+			Parts: []types.OpenAIContentPart{
+				{Type: "text", Text: "Hello "},
+				{Type: "text", Text: "world"},
+			},
+		},
+	}
+	items := convertAssistantMessageToInput(msg)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	// Content should be []ResponseInputContent
+	contentItems, ok := items[0].Content.([]types.ResponseInputContent)
+	if !ok {
+		t.Fatalf("expected []ResponseInputContent, got %T", items[0].Content)
+	}
+	if len(contentItems) != 2 {
+		t.Fatalf("expected 2 content items, got %d", len(contentItems))
+	}
+	if contentItems[0].Type != "output_text" || contentItems[0].Text != "Hello " {
+		t.Errorf("first content item: %+v", contentItems[0])
+	}
+	if contentItems[1].Type != "output_text" || contentItems[1].Text != "world" {
+		t.Errorf("second content item: %+v", contentItems[1])
+	}
+}
+
+func TestConvertAssistantMessageToInput_TextContent(t *testing.T) {
+	text := "just text"
+	msg := types.OpenAIMessage{
+		Role:    "assistant",
+		Content: &types.OpenAIContent{Text: &text},
+	}
+	items := convertAssistantMessageToInput(msg)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	s, ok := items[0].Content.(string)
+	if !ok {
+		t.Fatalf("expected string content, got %T", items[0].Content)
+	}
+	if s != "just text" {
+		t.Errorf("content = %q, want 'just text'", s)
+	}
+}
+
+func TestConvertAssistantMessageToInput_EmptyParts(t *testing.T) {
+	msg := types.OpenAIMessage{
+		Role: "assistant",
+		Content: &types.OpenAIContent{
+			Parts: []types.OpenAIContentPart{
+				{Type: "image_url"}, // not text
+			},
+		},
+	}
+	items := convertAssistantMessageToInput(msg)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	s, ok := items[0].Content.(string)
+	if !ok {
+		t.Fatalf("expected string fallback, got %T", items[0].Content)
+	}
+	if s != "" {
+		t.Errorf("content = %q, want empty string", s)
+	}
+}
+
+// --- Issue 4: Failed response error propagation (streaming) ---
+
+func TestResponsesFailedToChatChunk_WithErrorMessage(t *testing.T) {
+	state := NewResponsesStreamConvertState()
+	state.ID = "resp_1"
+	state.Model = "gpt-4"
+
+	event := types.ResponseStreamEvent{
+		Type: "response.failed",
+		Response: &types.ResponsesResult{
+			Error: &types.ResponseError{Message: "rate limit exceeded"},
+		},
+	}
+
+	chunks := ConvertResponsesStreamEventToChatChunk(event, state)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	// First chunk has error content
+	if chunks[0].Choices[0].Delta.Content == nil {
+		t.Fatal("first chunk should have content")
+	}
+	if *chunks[0].Choices[0].Delta.Content.Text != "rate limit exceeded" {
+		t.Errorf("error message = %q, want 'rate limit exceeded'", *chunks[0].Choices[0].Delta.Content.Text)
+	}
+	// Second chunk has finish
+	if chunks[1].Choices[0].FinishReason != "stop" {
+		t.Errorf("finish reason = %q, want 'stop'", chunks[1].Choices[0].FinishReason)
+	}
+}
+
+func TestResponsesFailedToChatChunk_WithEventMessage(t *testing.T) {
+	state := NewResponsesStreamConvertState()
+	event := types.ResponseStreamEvent{
+		Type:    "error",
+		Message: "internal error",
+	}
+
+	chunks := ConvertResponsesStreamEventToChatChunk(event, state)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	if *chunks[0].Choices[0].Delta.Content.Text != "internal error" {
+		t.Errorf("error message = %q, want 'internal error'", *chunks[0].Choices[0].Delta.Content.Text)
+	}
+}
+
+// --- Issue 6: ParallelToolCalls pointer semantics ---
+
+func TestParallelToolCalls_NilPassthrough(t *testing.T) {
+	// When not set in chat request, should remain nil in responses request
+	req := types.OpenAIChatCompletionsRequest{
+		Model: "gpt-4",
+	}
+	result := ConvertChatToResponsesRequest(req)
+	if result.ParallelToolCalls != nil {
+		t.Error("ParallelToolCalls should be nil when not set")
+	}
+}
+
+func TestParallelToolCalls_TruePreserved(t *testing.T) {
+	ptc := true
+	req := types.OpenAIChatCompletionsRequest{
+		Model:             "gpt-4",
+		ParallelToolCalls: &ptc,
+	}
+	result := ConvertChatToResponsesRequest(req)
+	if result.ParallelToolCalls == nil || !*result.ParallelToolCalls {
+		t.Error("ParallelToolCalls should be true")
+	}
+}
+
+func TestParallelToolCalls_FalsePreserved(t *testing.T) {
+	ptc := false
+	req := types.OpenAIChatCompletionsRequest{
+		Model:             "gpt-4",
+		ParallelToolCalls: &ptc,
+	}
+	result := ConvertChatToResponsesRequest(req)
+	if result.ParallelToolCalls == nil || *result.ParallelToolCalls {
+		t.Error("ParallelToolCalls should be false")
+	}
+}
+
+func TestParallelToolCalls_ResponsesToChatNilPassthrough(t *testing.T) {
+	req := types.ResponsesRequest{
+		Model: "gpt-4",
+		Input: []types.ResponseInputItem{
+			{Type: "message", Role: "user", Content: "Hi"},
+		},
+	}
+	result := ConvertResponsesToChatRequest(req)
+	if result.ParallelToolCalls != nil {
+		t.Error("ParallelToolCalls should be nil when not set")
+	}
+}
+
+func TestParallelToolCalls_OmittedInJSON(t *testing.T) {
+	req := types.ResponsesRequest{
+		Model: "gpt-4",
+	}
+	data, _ := json.Marshal(req)
+	var m map[string]interface{}
+	json.Unmarshal(data, &m)
+	if _, exists := m["parallel_tool_calls"]; exists {
+		t.Error("parallel_tool_calls should be omitted from JSON when nil")
+	}
+}
+
+// --- Issue 7: User and stop field handling ---
+
+func TestConvertChatToResponsesRequest_UserPassedAsMetadata(t *testing.T) {
+	req := types.OpenAIChatCompletionsRequest{
+		Model: "gpt-4",
+		User:  "user_123",
+	}
+	result := ConvertChatToResponsesRequest(req)
+	if result.Metadata == nil {
+		t.Fatal("Metadata should not be nil")
+	}
+	if result.Metadata["user"] != "user_123" {
+		t.Errorf("metadata user = %q, want 'user_123'", result.Metadata["user"])
+	}
+}
+
+func TestConvertChatToResponsesRequest_UserMergesWithExistingMetadata(t *testing.T) {
+	req := types.OpenAIChatCompletionsRequest{
+		Model:    "gpt-4",
+		User:     "user_456",
+		Metadata: map[string]string{"key": "value"},
+	}
+	result := ConvertChatToResponsesRequest(req)
+	if result.Metadata["user"] != "user_456" {
+		t.Errorf("metadata user = %q, want 'user_456'", result.Metadata["user"])
+	}
+	if result.Metadata["key"] != "value" {
+		t.Errorf("metadata key = %q, want 'value'", result.Metadata["key"])
+	}
+}
+
+func TestConvertChatToResponsesRequest_NoUserNoMetadata(t *testing.T) {
+	req := types.OpenAIChatCompletionsRequest{
+		Model: "gpt-4",
+	}
+	result := ConvertChatToResponsesRequest(req)
+	// Metadata should remain nil (or empty) when no user is set
+	if result.Metadata != nil && result.Metadata["user"] != "" {
+		t.Error("should not add user metadata when user is empty")
 	}
 }
