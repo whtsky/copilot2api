@@ -137,6 +137,21 @@ func (c *Cache) fetch(ctx context.Context) (cacheData, error) {
 	return cacheData{raw: respData, parsed: parsed}, nil
 }
 
+// PickEndpoint returns the first endpoint from preferred that the model
+// supports, or "" if none match. Returns "" when info is nil (unknown model),
+// letting callers fall back to default behavior.
+func PickEndpoint(info *Info, preferred []string) string {
+	if info == nil {
+		return ""
+	}
+	for _, ep := range preferred {
+		if SupportsEndpoint(info, ep) {
+			return ep
+		}
+	}
+	return ""
+}
+
 // SupportsEndpoint reports whether info supports the given endpoint.
 func SupportsEndpoint(info *Info, endpoint string) bool {
 	if info == nil {

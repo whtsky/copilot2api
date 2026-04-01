@@ -24,14 +24,14 @@ func TestConvertAnthropicToResponses_SimpleText(t *testing.T) {
 	if result.Model != "claude-3.5-sonnet" {
 		t.Errorf("model = %q, want %q", result.Model, "claude-3.5-sonnet")
 	}
-	if result.MaxOutputTokens != 12800 {
-		t.Errorf("max_output_tokens = %d, want %d", result.MaxOutputTokens, 12800)
+	if result.MaxOutputTokens == nil || *result.MaxOutputTokens != 12800 {
+		t.Errorf("max_output_tokens = %v, want %d", result.MaxOutputTokens, 12800)
 	}
 	if result.Instructions == nil || *result.Instructions != "You are helpful" {
 		t.Errorf("instructions not set correctly")
 	}
-	if result.Temperature != 1 {
-		t.Errorf("temperature = %f, want 1", result.Temperature)
+	if result.Temperature == nil || *result.Temperature != 1 {
+		t.Errorf("temperature = %v, want 1", result.Temperature)
 	}
 	if !result.Stream {
 		t.Error("expected stream = true")
@@ -64,8 +64,8 @@ func TestConvertAnthropicToResponses_MaxTokensFloor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.MaxOutputTokens != 12800 {
-		t.Errorf("max_output_tokens = %d, want 12800 (floor)", result.MaxOutputTokens)
+	if result.MaxOutputTokens == nil || *result.MaxOutputTokens != 12800 {
+		t.Errorf("max_output_tokens = %v, want 12800 (floor)", result.MaxOutputTokens)
 	}
 }
 
@@ -133,8 +133,8 @@ func TestConvertAnthropicToResponses_LargeMaxTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.MaxOutputTokens != 50000 {
-		t.Errorf("max_output_tokens = %d, want 50000", result.MaxOutputTokens)
+	if result.MaxOutputTokens == nil || *result.MaxOutputTokens != 50000 {
+		t.Errorf("max_output_tokens = %v, want 50000", result.MaxOutputTokens)
 	}
 }
 

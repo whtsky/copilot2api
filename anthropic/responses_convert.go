@@ -49,19 +49,21 @@ func ConvertAnthropicToResponses(req AnthropicMessagesRequest) (ResponsesRequest
 		maxOutputTokens = 12800
 	}
 
+	ptc := req.ToolChoice == nil || req.ToolChoice.DisableParallelCalls == nil || !*req.ToolChoice.DisableParallelCalls
+
 	result := ResponsesRequest{
 		Model:             req.Model,
 		Input:             input,
 		Instructions:      instructions,
-		Temperature:       1, // Responses API requires temperature=1 for reasoning models
+		Temperature:       ptrFloat64(1), // Responses API requires temperature=1 for reasoning models
 		TopP:              req.TopP,
-		MaxOutputTokens:   maxOutputTokens,
+		MaxOutputTokens:   &maxOutputTokens,
 		Tools:             tools,
 		ToolChoice:        toolChoice,
 		Metadata:          req.Metadata,
 		Stream:            req.Stream,
 		Store:             false,
-		ParallelToolCalls: req.ToolChoice == nil || req.ToolChoice.DisableParallelCalls == nil || !*req.ToolChoice.DisableParallelCalls,
+		ParallelToolCalls: &ptc,
 		Reasoning:         &ResponseReasoning{Effort: resolveReasoningEffort(req.Thinking, req.OutputConfig), Summary: "detailed"},
 		Include:           []string{"reasoning.encrypted_content"},
 	}
@@ -511,3 +513,5 @@ func mapResponsesUsage(result ResponsesResult) AnthropicUsage {
 	}
 	return usage
 }
+
+func ptrFloat64(v float64) *float64 { return &v }
