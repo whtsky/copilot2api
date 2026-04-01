@@ -2,7 +2,6 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
   pull_request:
   release:
     types: [created]
@@ -93,6 +92,7 @@ jobs:
             type=semver,pattern={{version}},enable=${{ github.event_name == 'release' }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'release' }}
             type=sha,enable=${{ github.event_name == 'push' }}
+            type=ref,event=branch,enable=${{ github.event_name == 'push' }}
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') || github.event_name == 'release' }}
       - uses: docker/build-push-action@v6
         with:

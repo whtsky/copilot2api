@@ -489,11 +489,8 @@ func respEmitDone(state *ResponsesStreamState, fallbackText string, openBlock bl
 
 // --- Helpers ---
 
-// blockKey is a struct key for the block index map, avoiding fmt.Sprintf per lookup.
-type blockKey struct{ outputIndex, contentIndex int }
-
 func respBlockKey(outputIndex, contentIndex int) blockKey {
-	return blockKey{outputIndex, contentIndex}
+	return blockKey{OutputIndex: outputIndex, ContentIndex: contentIndex}
 }
 
 func respBuildErrorEvent(message string) AnthropicStreamEvent {

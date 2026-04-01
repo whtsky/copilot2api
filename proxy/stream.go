@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/whtsky/copilot2api/internal/sse"
+	"github.com/whtsky/copilot2api/internal/types"
 	"github.com/whtsky/copilot2api/internal/upstream"
 )
 
@@ -150,4 +151,197 @@ func isStreamingRequest(body []byte) bool {
 		return false
 	}
 	return top.Stream
+}
+
+// --- Streaming conversion functions ---
+
+// streamResponsesAsChatChunks reads Responses API SSE events from body,
+// converts each to Chat Completions chunks, and writes them to w.
+// Used when the client requested /chat/completions but the model only
+// supports /responses.
+func streamResponsesAsChatChunks(w http.ResponseWriter, body io.ReadCloser) error {
+	scanner := bufio.NewScanner(body)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	flusher, canFlush := w.(http.Flusher)
+	state := NewResponsesStreamConvertState()
+
+	var currentEventType string
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Parse SSE event type lines
+		if strings.HasPrefix(line, "event: ") {
+			currentEventType = strings.TrimPrefix(line, "event: ")
+			continue
+		}
+
+		// Parse SSE data lines
+		if strings.HasPrefix(line, "data: ") {
+			dataStr := strings.TrimPrefix(line, "data: ")
+
+			// The Responses API may send data: [DONE] before response.completed.
+			// Ignore it — we rely on the converter's Finished state to know when
+			// to emit the Chat Completions [DONE] sentinel.
+			if dataStr == "[DONE]" {
+				continue
+			}
+
+			var event types.ResponseStreamEvent
+			if err := json.Unmarshal([]byte(dataStr), &event); err != nil {
+				slog.Debug("skipping unparseable SSE data in conversion", "error", err)
+				continue
+			}
+
+			// Use the event type from the "event:" line if the JSON doesn't
+			// include it (some implementations put it only on the SSE line).
+			if event.Type == "" && currentEventType != "" {
+				event.Type = currentEventType
+			}
+
+			chunks := ConvertResponsesStreamEventToChatChunk(event, state)
+			for _, chunk := range chunks {
+				chunkData, err := json.Marshal(chunk)
+				if err != nil {
+					continue
+				}
+				if _, err := fmt.Fprintf(w, "data: %s\n\n", chunkData); err != nil {
+					return err
+				}
+				if canFlush {
+					flusher.Flush()
+				}
+			}
+
+			// Check if the converter signaled stream completion
+			if state.Finished {
+				// Send [DONE] sentinel for Chat Completions format
+				if _, err := io.WriteString(w, "data: [DONE]\n\n"); err != nil {
+					return err
+				}
+				if canFlush {
+					flusher.Flush()
+				}
+				return nil
+			}
+
+			currentEventType = ""
+			continue
+		}
+
+		// Blank lines are SSE event delimiters — reset event type
+		if line == "" {
+			currentEventType = ""
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	// If we didn't see a termination event, send [DONE] anyway so the
+	// client doesn't hang waiting for more data.
+	if !state.Finished {
+		if _, err := io.WriteString(w, "data: [DONE]\n\n"); err != nil {
+			return err
+		}
+		if canFlush {
+			flusher.Flush()
+		}
+	}
+
+	return nil
+}
+
+// streamChatChunksAsResponsesEvents reads Chat Completions SSE chunks from body,
+// converts each to Responses API events, and writes them to w.
+// Used when the client requested /responses but the model only
+// supports /chat/completions.
+func streamChatChunksAsResponsesEvents(w http.ResponseWriter, body io.ReadCloser) error {
+	scanner := bufio.NewScanner(body)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	flusher, canFlush := w.(http.Flusher)
+	state := NewChatStreamConvertState()
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Only process data lines
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+
+		dataStr := strings.TrimPrefix(line, "data: ")
+
+		// [DONE] sentinel — stream is finished
+		if dataStr == "[DONE]" {
+			// If finish_reason was seen but termination event wasn't emitted
+			// (no usage-only chunk arrived), emit it now without usage.
+			if state.FinishSeen && !state.Finished {
+				terminationEvent := state.buildTerminationEvent()
+				if err := writeResponsesSSEEvent(w, terminationEvent); err != nil {
+					return err
+				}
+				if canFlush {
+					flusher.Flush()
+				}
+			}
+			// If we haven't sent any termination event (edge case: no finish_reason seen)
+			if !state.Finished {
+				completedEvent := types.ResponseStreamEvent{
+					Type: "response.completed",
+					Response: &types.ResponsesResult{
+						ID:     state.ID,
+						Model:  state.Model,
+						Status: "completed",
+					},
+				}
+				if err := writeResponsesSSEEvent(w, completedEvent); err != nil {
+					return err
+				}
+				if canFlush {
+					flusher.Flush()
+				}
+			}
+			return nil
+		}
+
+		var chunk types.OpenAIChatCompletionChunk
+		if err := json.Unmarshal([]byte(dataStr), &chunk); err != nil {
+			slog.Debug("skipping unparseable SSE data in conversion", "error", err)
+			continue
+		}
+
+		events := ConvertChatChunkToResponsesStreamEvents(chunk, state)
+		for _, event := range events {
+			if err := writeResponsesSSEEvent(w, event); err != nil {
+				return err
+			}
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// writeResponsesSSEEvent writes a single Responses API SSE event to w.
+func writeResponsesSSEEvent(w io.Writer, event types.ResponseStreamEvent) error {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, data); err != nil {
+		return err
+	}
+	return nil
 }

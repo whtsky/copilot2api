@@ -12,6 +12,8 @@ import (
 
 	"github.com/whtsky/copilot2api/auth"
 	"github.com/whtsky/copilot2api/internal/models"
+	"github.com/whtsky/copilot2api/internal/sse"
+	"github.com/whtsky/copilot2api/internal/types"
 	"github.com/whtsky/copilot2api/internal/upstream"
 )
 
@@ -102,36 +104,221 @@ func (h *Handler) handlePassthrough(w http.ResponseWriter, r *http.Request, endp
 // handlePassthroughBody processes the passthrough request after the body has been read and validated.
 // It takes pre-read body bytes to avoid redundant body reading.
 func (h *Handler) handlePassthroughBody(w http.ResponseWriter, r *http.Request, endpoint string, bodyBytes []byte) {
-	// Check if this is a streaming request
-	if isStreamingRequest(bodyBytes) {
-		if err := h.HandleStreamingRequest(w, r, endpoint); err != nil {
-		upstream.LogRequestError("streaming request failed", err, "endpoint", endpoint)
-			// If headers were already sent we can't write an HTTP error.
-			// Otherwise, send a proper 502 so the client doesn't get an empty 200.
-			var hse *headersSentError
-			if !errors.As(err, &hse) {
-				WriteOpenAIError(w, http.StatusBadGateway, OpenAIErrorTypeServerError, "upstream request failed")
+	// Determine smart routing: should we convert to a different endpoint?
+	targetEndpoint := h.resolveTargetEndpoint(r, endpoint, bodyBytes)
+
+	if targetEndpoint != endpoint {
+		slog.Info("smart routing: converting request", "from", endpoint, "to", targetEndpoint)
+	}
+
+	streaming := isStreamingRequest(bodyBytes)
+
+	// If no conversion needed, passthrough as before
+	if targetEndpoint == endpoint {
+		if streaming {
+			if err := h.HandleStreamingRequest(w, r, endpoint); err != nil {
+				upstream.LogRequestError("streaming request failed", err, "endpoint", endpoint)
+				var hse *headersSentError
+				if !errors.As(err, &hse) {
+					WriteOpenAIError(w, http.StatusBadGateway, OpenAIErrorTypeServerError, "upstream request failed")
+				}
 			}
+			return
 		}
+
+		respData, err := h.doNonStreamingRequest(r, endpoint)
+		if err != nil {
+			var upstreamErr *upstream.UpstreamError
+			if errors.As(err, &upstreamErr) {
+				upstreamErr.WriteRawError(w)
+				return
+			}
+			upstream.LogRequestError("passthrough request failed", err, "endpoint", endpoint)
+			WriteOpenAIError(w, http.StatusInternalServerError, OpenAIErrorTypeServerError, "Internal server error")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(respData)
 		return
 	}
 
-	// Handle non-streaming request
-	respData, err := h.doNonStreamingRequest(r, endpoint)
+	// Conversion needed: route based on direction
+	switch {
+	case endpoint == "/chat/completions" && targetEndpoint == "/responses":
+		if streaming {
+			h.handleChatToResponsesStreaming(w, r, bodyBytes)
+		} else {
+			h.handleChatToResponsesNonStreaming(w, r, bodyBytes)
+		}
+	case endpoint == "/responses" && targetEndpoint == "/chat/completions":
+		if streaming {
+			h.handleResponsesToChatStreaming(w, r, bodyBytes)
+		} else {
+			h.handleResponsesToChatNonStreaming(w, r, bodyBytes)
+		}
+	}
+}
+
+// resolveTargetEndpoint determines which upstream endpoint to use based on
+// model capabilities. Returns the original endpoint when no conversion is
+// needed (model supports it, model is unknown, or capabilities are unavailable).
+func (h *Handler) resolveTargetEndpoint(r *http.Request, endpoint string, bodyBytes []byte) string {
+	if h.modelsCache == nil {
+		return endpoint
+	}
+
+	modelID := extractModelField(bodyBytes)
+	if modelID == "" {
+		return endpoint // no model field → passthrough
+	}
+
+	modelMap, err := h.modelsCache.GetInfo(r.Context())
+	if err != nil {
+		slog.Debug("smart routing: failed to get model info, falling back to passthrough", "error", err)
+		return endpoint
+	}
+
+	info := modelMap[modelID]
+	// Unknown model → passthrough (best effort)
+	if info == nil {
+		return endpoint
+	}
+
+	// Build preference order: requested endpoint first, then the alternative
+	var preferred []string
+	switch endpoint {
+	case "/chat/completions":
+		preferred = []string{"/chat/completions", "/responses"}
+	case "/responses":
+		preferred = []string{"/responses", "/chat/completions"}
+	default:
+		return endpoint
+	}
+
+	target := models.PickEndpoint(info, preferred)
+	if target == "" {
+		// Model supports neither → passthrough, let upstream return the error
+		return endpoint
+	}
+	return target
+}
+
+// extractModelField extracts the "model" field from a JSON request body.
+func extractModelField(body []byte) string {
+	var top struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &top); err != nil {
+		return ""
+	}
+	return top.Model
+}
+
+// --- Non-streaming conversion handlers ---
+
+// handleChatToResponsesNonStreaming converts a Chat Completions request to
+// Responses API, sends it upstream, and converts the response back.
+func (h *Handler) handleChatToResponsesNonStreaming(w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
+	var chatReq types.OpenAIChatCompletionsRequest
+	if err := json.Unmarshal(bodyBytes, &chatReq); err != nil {
+		WriteOpenAIError(w, http.StatusBadRequest, OpenAIErrorTypeInvalidRequest, "Invalid JSON in request body")
+		return
+	}
+
+	responsesReq := ConvertChatToResponsesRequest(chatReq)
+	reqBody, err := json.Marshal(responsesReq)
+	if err != nil {
+		WriteOpenAIError(w, http.StatusInternalServerError, OpenAIErrorTypeServerError, "Failed to marshal converted request")
+		return
+	}
+
+	_, respData, err := h.upstream.Do(r.Context(), upstream.Request{
+		Method:       r.Method,
+		Endpoint:     "/responses",
+		Body:         reqBody,
+		QueryString:  r.URL.RawQuery,
+		ExtraHeaders: collectForwardHeaders(r),
+	})
 	if err != nil {
 		var upstreamErr *upstream.UpstreamError
 		if errors.As(err, &upstreamErr) {
-			// Forward upstream status code and body
 			upstreamErr.WriteRawError(w)
 			return
 		}
-		upstream.LogRequestError("passthrough request failed", err, "endpoint", endpoint)
+		upstream.LogRequestError("converted request failed", err, "from", "/chat/completions", "to", "/responses")
 		WriteOpenAIError(w, http.StatusInternalServerError, OpenAIErrorTypeServerError, "Internal server error")
 		return
 	}
 
+	var responsesResult types.ResponsesResult
+	if err := json.Unmarshal(respData, &responsesResult); err != nil {
+		slog.Error("failed to parse responses result for conversion", "error", err)
+		WriteOpenAIError(w, http.StatusInternalServerError, OpenAIErrorTypeServerError, "Failed to parse upstream response")
+		return
+	}
+
+	chatResp := ConvertResponsesResultToChatResponse(responsesResult, chatReq.Model)
+	result, err := json.Marshal(chatResp)
+	if err != nil {
+		WriteOpenAIError(w, http.StatusInternalServerError, OpenAIErrorTypeServerError, "Failed to marshal response")
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(respData)
+	w.Write(result)
+}
+
+// handleResponsesToChatNonStreaming converts a Responses API request to
+// Chat Completions, sends it upstream, and converts the response back.
+func (h *Handler) handleResponsesToChatNonStreaming(w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
+	var responsesReq types.ResponsesRequest
+	if err := json.Unmarshal(bodyBytes, &responsesReq); err != nil {
+		WriteOpenAIError(w, http.StatusBadRequest, OpenAIErrorTypeInvalidRequest, "Invalid JSON in request body")
+		return
+	}
+
+	chatReq := ConvertResponsesToChatRequest(responsesReq)
+	reqBody, err := json.Marshal(chatReq)
+	if err != nil {
+		WriteOpenAIError(w, http.StatusInternalServerError, OpenAIErrorTypeServerError, "Failed to marshal converted request")
+		return
+	}
+
+	_, respData, err := h.upstream.Do(r.Context(), upstream.Request{
+		Method:       r.Method,
+		Endpoint:     "/chat/completions",
+		Body:         reqBody,
+		QueryString:  r.URL.RawQuery,
+		ExtraHeaders: collectForwardHeaders(r),
+	})
+	if err != nil {
+		var upstreamErr *upstream.UpstreamError
+		if errors.As(err, &upstreamErr) {
+			upstreamErr.WriteRawError(w)
+			return
+		}
+		upstream.LogRequestError("converted request failed", err, "from", "/responses", "to", "/chat/completions")
+		WriteOpenAIError(w, http.StatusInternalServerError, OpenAIErrorTypeServerError, "Internal server error")
+		return
+	}
+
+	var chatResp types.OpenAIChatCompletionsResponse
+	if err := json.Unmarshal(respData, &chatResp); err != nil {
+		slog.Error("failed to parse chat response for conversion", "error", err)
+		WriteOpenAIError(w, http.StatusInternalServerError, OpenAIErrorTypeServerError, "Failed to parse upstream response")
+		return
+	}
+
+	responsesResult := ConvertChatResponseToResponsesResult(chatResp)
+	result, err := json.Marshal(responsesResult)
+	if err != nil {
+		WriteOpenAIError(w, http.StatusInternalServerError, OpenAIErrorTypeServerError, "Failed to marshal response")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(result)
 }
 
 // doNonStreamingRequest makes a non-streaming request to the Copilot API via the shared upstream client.
@@ -209,6 +396,102 @@ func (h *Handler) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.ContentLength = int64(len(body))
 	h.handlePassthroughBody(w, r, "/embeddings", body)
+}
+
+// --- Streaming conversion handlers ---
+
+// handleChatToResponsesStreaming sends a converted Chat→Responses request upstream
+// and converts the Responses stream events back to Chat Completions chunks.
+func (h *Handler) handleChatToResponsesStreaming(w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
+	var chatReq types.OpenAIChatCompletionsRequest
+	if err := json.Unmarshal(bodyBytes, &chatReq); err != nil {
+		WriteOpenAIError(w, http.StatusBadRequest, OpenAIErrorTypeInvalidRequest, "Invalid JSON in request body")
+		return
+	}
+
+	responsesReq := ConvertChatToResponsesRequest(chatReq)
+	reqBody, err := json.Marshal(responsesReq)
+	if err != nil {
+		WriteOpenAIError(w, http.StatusInternalServerError, OpenAIErrorTypeServerError, "Failed to marshal converted request")
+		return
+	}
+
+	resp, _, err := h.upstream.Do(r.Context(), upstream.Request{
+		Method:       r.Method,
+		Endpoint:     "/responses",
+		Body:         reqBody,
+		QueryString:  r.URL.RawQuery,
+		Stream:       true,
+		ExtraHeaders: collectForwardHeaders(r),
+	})
+	if err != nil {
+		var upstreamErr *upstream.UpstreamError
+		if errors.As(err, &upstreamErr) {
+			upstreamErr.WriteRawError(w)
+			return
+		}
+		upstream.LogRequestError("converted streaming request failed", err, "from", "/chat/completions", "to", "/responses")
+		WriteOpenAIError(w, http.StatusBadGateway, OpenAIErrorTypeServerError, "upstream request failed")
+		return
+	}
+	defer resp.Body.Close()
+
+	sse.BeginSSE(w)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	if err := streamResponsesAsChatChunks(w, resp.Body); err != nil {
+		slog.Error("streaming conversion failed (responses→chat)", "error", err)
+		// Headers already sent, can't write HTTP error
+	}
+}
+
+// handleResponsesToChatStreaming sends a converted Responses→Chat request upstream
+// and converts the Chat Completions stream chunks back to Responses API events.
+func (h *Handler) handleResponsesToChatStreaming(w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
+	var responsesReq types.ResponsesRequest
+	if err := json.Unmarshal(bodyBytes, &responsesReq); err != nil {
+		WriteOpenAIError(w, http.StatusBadRequest, OpenAIErrorTypeInvalidRequest, "Invalid JSON in request body")
+		return
+	}
+
+	chatReq := ConvertResponsesToChatRequest(responsesReq)
+	reqBody, err := json.Marshal(chatReq)
+	if err != nil {
+		WriteOpenAIError(w, http.StatusInternalServerError, OpenAIErrorTypeServerError, "Failed to marshal converted request")
+		return
+	}
+
+	resp, _, err := h.upstream.Do(r.Context(), upstream.Request{
+		Method:       r.Method,
+		Endpoint:     "/chat/completions",
+		Body:         reqBody,
+		QueryString:  r.URL.RawQuery,
+		Stream:       true,
+		ExtraHeaders: collectForwardHeaders(r),
+	})
+	if err != nil {
+		var upstreamErr *upstream.UpstreamError
+		if errors.As(err, &upstreamErr) {
+			upstreamErr.WriteRawError(w)
+			return
+		}
+		upstream.LogRequestError("converted streaming request failed", err, "from", "/responses", "to", "/chat/completions")
+		WriteOpenAIError(w, http.StatusBadGateway, OpenAIErrorTypeServerError, "upstream request failed")
+		return
+	}
+	defer resp.Body.Close()
+
+	sse.BeginSSE(w)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	if err := streamChatChunksAsResponsesEvents(w, resp.Body); err != nil {
+		slog.Error("streaming conversion failed (chat→responses)", "error", err)
+		// Headers already sent, can't write HTTP error
+	}
 }
 
 // --- OpenAI error response helpers ---
