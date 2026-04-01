@@ -14,9 +14,9 @@ type ResponsesRequest struct {
 	Model             string              `json:"model"`
 	Input             []ResponseInputItem `json:"input"`
 	Instructions      *string             `json:"instructions"`
-	Temperature       float64             `json:"temperature"`
-	TopP              *float64            `json:"top_p"`
-	MaxOutputTokens   int                 `json:"max_output_tokens"`
+	Temperature       *float64            `json:"temperature,omitempty"`
+	TopP              *float64            `json:"top_p,omitempty"`
+	MaxOutputTokens   *int                `json:"max_output_tokens,omitempty"`
 	Tools             []ResponseTool      `json:"tools,omitempty"`
 	ToolChoice        interface{}         `json:"tool_choice,omitempty"`
 	Metadata          map[string]string   `json:"metadata,omitempty"`

@@ -165,8 +165,8 @@ func TestConvertChatToResponsesRequest_Temperature(t *testing.T) {
 
 	result := ConvertChatToResponsesRequest(req)
 
-	if result.Temperature != 0.7 {
-		t.Errorf("Temperature = %f, want 0.7", result.Temperature)
+	if result.Temperature == nil || *result.Temperature != 0.7 {
+		t.Errorf("Temperature = %v, want 0.7", result.Temperature)
 	}
 }
 
@@ -179,8 +179,8 @@ func TestConvertChatToResponsesRequest_MaxTokens(t *testing.T) {
 
 	result := ConvertChatToResponsesRequest(req)
 
-	if result.MaxOutputTokens != 1000 {
-		t.Errorf("MaxOutputTokens = %d, want 1000", result.MaxOutputTokens)
+	if result.MaxOutputTokens == nil || *result.MaxOutputTokens != 1000 {
+		t.Errorf("MaxOutputTokens = %v, want 1000", result.MaxOutputTokens)
 	}
 }
 
@@ -348,9 +348,10 @@ func TestConvertResponsesToChatRequest_FunctionCallItems(t *testing.T) {
 }
 
 func TestConvertResponsesToChatRequest_TemperatureZero(t *testing.T) {
+	temp := 0.0
 	req := types.ResponsesRequest{
 		Model:       "gpt-4",
-		Temperature: 0,
+		Temperature: &temp,
 	}
 
 	result := ConvertResponsesToChatRequest(req)

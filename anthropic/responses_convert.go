@@ -53,9 +53,9 @@ func ConvertAnthropicToResponses(req AnthropicMessagesRequest) (ResponsesRequest
 		Model:             req.Model,
 		Input:             input,
 		Instructions:      instructions,
-		Temperature:       1, // Responses API requires temperature=1 for reasoning models
+		Temperature:       ptrFloat64(1), // Responses API requires temperature=1 for reasoning models
 		TopP:              req.TopP,
-		MaxOutputTokens:   maxOutputTokens,
+		MaxOutputTokens:   &maxOutputTokens,
 		Tools:             tools,
 		ToolChoice:        toolChoice,
 		Metadata:          req.Metadata,
@@ -511,3 +511,5 @@ func mapResponsesUsage(result ResponsesResult) AnthropicUsage {
 	}
 	return usage
 }
+
+func ptrFloat64(v float64) *float64 { return &v }

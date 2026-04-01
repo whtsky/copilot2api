@@ -39,17 +39,16 @@ func ConvertChatToResponsesRequest(req types.OpenAIChatCompletionsRequest) types
 		result.ParallelToolCalls = *req.ParallelToolCalls
 	}
 
-	// Temperature
-	if req.Temperature != nil {
-		result.Temperature = *req.Temperature
-	}
+	// Temperature — pass through as-is (pointer, nil = omit from JSON)
+	result.Temperature = req.Temperature
 
 	// TopP
 	result.TopP = req.TopP
 
 	// MaxOutputTokens
 	if req.MaxTokens != nil {
-		result.MaxOutputTokens = *req.MaxTokens
+		v := *req.MaxTokens
+		result.MaxOutputTokens = &v
 	}
 
 	// Thinking budget → reasoning
@@ -348,17 +347,16 @@ func ConvertResponsesToChatRequest(req types.ResponsesRequest) types.OpenAIChatC
 	parallelCalls := req.ParallelToolCalls
 	result.ParallelToolCalls = &parallelCalls
 
-	// Temperature — always forward the value. The Responses API uses a non-pointer
-	// float64, so 0 is a valid explicit value (deterministic sampling).
-	temp := req.Temperature
-	result.Temperature = &temp
+	// Temperature — pass through as-is (pointer, nil = omit)
+	result.Temperature = req.Temperature
 
 	// TopP
 	result.TopP = req.TopP
 
 	// MaxTokens
-	if req.MaxOutputTokens > 0 {
-		result.MaxTokens = &req.MaxOutputTokens
+	if req.MaxOutputTokens != nil {
+		v := *req.MaxOutputTokens
+		result.MaxTokens = &v
 	}
 
 	// Reasoning → thinking budget
