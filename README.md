@@ -1,11 +1,13 @@
 # copilot2api
 
-A lightweight Go proxy that exposes GitHub Copilot as both OpenAI-compatible and Anthropic-compatible API endpoints.
+A lightweight Go proxy that exposes GitHub Copilot as OpenAI-compatible, Anthropic-compatible, and Gemini-compatible API endpoints.
 
 ## Features
 
 - **OpenAI API Compatible**: `/v1/chat/completions`, `/v1/models`, `/v1/embeddings`, `/v1/responses`
+- **Embeddings Support**: Native OpenAI-compatible `/v1/embeddings` endpoint
 - **Anthropic API Compatible**: `/v1/messages`
+- **Gemini API Compatible**: `/v1beta/models`, `/v1beta/models/{model}:generateContent`, `/v1beta/models/{model}:streamGenerateContent`, `/v1beta/models/{model}:countTokens`
 - **Streaming Support**: Full SSE streaming for both OpenAI and Anthropic formats
 - **Anthropic Routing**: Uses native `/v1/messages` when the model supports it, otherwise routes via `/responses` or `/chat/completions`
 - **Auto Authentication**: GitHub Device Flow OAuth with automatic token refresh
@@ -87,6 +89,16 @@ wire_api = "responses"
 api_key = "dummy"
 ```
 
+## Usage with Gemini CLI
+
+Add to `~/.gemini/.env`:
+
+```env
+GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:7777
+GEMINI_API_KEY=dummy
+GEMINI_MODEL=claude-opus-4.6-1m
+```
+
 ## Usage with curl
 
 ```bash
@@ -155,6 +167,10 @@ message = client.messages.create(
 | `/v1/models` | GET | List available models (5min cache) |
 | `/v1/embeddings` | POST | Generate embeddings (string or array input) |
 | `/v1/messages` | POST | Anthropic Messages API (streaming & non-streaming) |
+| `/v1beta/models` | GET | List Gemini-compatible models |
+| `/v1beta/models/{model}:generateContent` | POST | Gemini Generate Content |
+| `/v1beta/models/{model}:streamGenerateContent` | POST | Gemini Generate Content streaming SSE |
+| `/v1beta/models/{model}:countTokens` | POST | Gemini token counting estimate |
 | `/usage` | GET | Copilot usage and quota info |
 
 ## Configuration

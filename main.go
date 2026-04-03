@@ -15,6 +15,7 @@ import (
 
 	"github.com/whtsky/copilot2api/anthropic"
 	"github.com/whtsky/copilot2api/auth"
+	"github.com/whtsky/copilot2api/gemini"
 	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/internal/upstream"
 	"github.com/whtsky/copilot2api/proxy"
@@ -119,6 +120,9 @@ func main() {
 	// Initialize Anthropic handler
 	anthropicHandler := anthropic.NewHandler(authClient, transport, modelsCache)
 
+	// Initialize Gemini handler
+	geminiHandler := gemini.NewHandler(authClient, transport, modelsCache)
+
 	// Set up routes
 	mux := http.NewServeMux()
 	mux.Handle("/v1/chat/completions", proxyHandler)
@@ -126,6 +130,8 @@ func main() {
 	mux.Handle("/v1/embeddings", proxyHandler)
 	mux.Handle("/v1/responses", proxyHandler)
 	mux.Handle("/v1/messages", anthropicHandler)
+	mux.Handle("/v1beta/models", geminiHandler)
+	mux.Handle("/v1beta/models/", geminiHandler)
 	mux.HandleFunc("/usage", proxyHandler.HandleUsage)
 
 	// Pre-warm models cache to avoid cold-cache latency on first request
