@@ -1,6 +1,6 @@
 # copilot2api
 
-A lightweight Go proxy that exposes GitHub Copilot as OpenAI-compatible, Anthropic-compatible, and Gemini-compatible API endpoints.
+A lightweight Go proxy that exposes GitHub Copilot as OpenAI-compatible, Anthropic-compatible, Gemini-compatible, and AmpCode-compatible API endpoints.
 
 ## Features
 
@@ -8,6 +8,7 @@ A lightweight Go proxy that exposes GitHub Copilot as OpenAI-compatible, Anthrop
 - **Embeddings Support**: Native OpenAI-compatible `/v1/embeddings` endpoint
 - **Anthropic API Compatible**: `/v1/messages`
 - **Gemini API Compatible**: `/v1beta/models`, `/v1beta/models/{model}:generateContent`, `/v1beta/models/{model}:streamGenerateContent`, `/v1beta/models/{model}:countTokens`
+- **AmpCode Compatible**: `/amp/v1/*` routes for chat, `/api/provider/*` for provider-specific calls, management proxied to `ampcode.com`
 - **Streaming Support**: Full SSE streaming for both OpenAI and Anthropic formats
 - **Anthropic Routing**: Uses native `/v1/messages` when the model supports it, otherwise routes via `/responses` or `/chat/completions`
 - **Auto Authentication**: GitHub Device Flow OAuth with automatic token refresh
@@ -99,6 +100,24 @@ GEMINI_API_KEY=dummy
 GEMINI_MODEL=claude-opus-4.6-1m
 ```
 
+## Usage with AmpCode
+
+Set the `AMP_URL` environment variable to point at copilot2api:
+
+```bash
+AMP_URL=http://127.0.0.1:7777/amp amp
+```
+
+Or add to `~/.config/amp/settings.json`:
+
+```json
+{
+  "amp.url": "http://127.0.0.1:7777/amp"
+}
+```
+
+Chat completions, tool calls, and image input all route through Copilot API. Login and management routes (threads, telemetry) are proxied to `ampcode.com` — a free amp account is required for authentication.
+
 ## Usage with curl
 
 ```bash
@@ -171,6 +190,10 @@ message = client.messages.create(
 | `/v1beta/models/{model}:generateContent` | POST | Gemini Generate Content |
 | `/v1beta/models/{model}:streamGenerateContent` | POST | Gemini Generate Content streaming SSE |
 | `/v1beta/models/{model}:countTokens` | POST | Gemini token counting estimate |
+| `/amp/v1/chat/completions` | POST | AmpCode chat completions (via Copilot API) |
+| `/amp/v1/models` | GET | AmpCode model listing |
+| `/api/provider/*` | POST | AmpCode provider-specific routes |
+| `/api/*` | ANY | AmpCode management proxy to ampcode.com |
 | `/usage` | GET | Copilot usage and quota info |
 
 ## Configuration
