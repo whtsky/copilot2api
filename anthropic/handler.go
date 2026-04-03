@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -88,14 +89,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if modelSupportsEndpoint(modelInfo, "/v1/messages") {
 		route = "native"
+		cacheControlInfo := inspectCacheControl(reqBody)
+		topLevelInfo := inspectTopLevelFields(reqBody)
+		slog.Debug("native /messages passthrough request", "model", anthropicReq.Model, "top_level_keys", topLevelInfo.Keys, "has_context_management", topLevelInfo.HasContextManagement, "cache_control_count", cacheControlInfo.Count, "cache_control_scope_count", cacheControlInfo.ScopeCount, "cache_control_paths", cacheControlInfo.Paths, "cache_control_scope_paths", cacheControlInfo.ScopePaths)
 		// Only re-encode the body for native passthrough (the only path that
 		// sends raw reqBody). Responses and Chat Completions paths use the
 		// parsed struct, so they skip this JSON round-trip.
-		if modelChanged {
-			newBody, err := replaceModelInBody(reqBody, resolvedModel)
+		if modelChanged || cacheControlInfo.ScopeCount > 0 || topLevelInfo.HasContextManagement {
+			newBody, err := normalizeNativeMessagesBody(reqBody, resolvedModel, modelChanged)
 			if err != nil {
 				WriteAnthropicError(w, http.StatusBadRequest, AnthropicErrorTypeInvalidRequest, fmt.Sprintf("Invalid JSON: %v", err))
 				return
+			}
+			if cacheControlInfo.ScopeCount > 0 {
+				slog.Debug("normalized native /messages request", "removed_cache_control_scope_paths", cacheControlInfo.ScopePaths)
+			}
+			if topLevelInfo.HasContextManagement {
+				slog.Debug("normalized native /messages request", "removed_top_level_field", "context_management")
 			}
 			reqBody = newBody
 		}
@@ -659,6 +669,102 @@ func replaceModelInBody(body []byte, newModel string) ([]byte, error) {
 	modelJSON, _ := json.Marshal(newModel)
 	raw["model"] = modelJSON
 	return json.Marshal(raw)
+}
+
+func normalizeNativeMessagesBody(body []byte, newModel string, replaceModel bool) ([]byte, error) {
+	var raw interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+
+	obj, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("request body must be a JSON object")
+	}
+
+	if replaceModel {
+		obj["model"] = newModel
+	}
+
+	delete(obj, "context_management")
+	stripCacheControlScope(obj)
+	return json.Marshal(obj)
+}
+
+type topLevelFieldInspection struct {
+	Keys                 []string
+	HasContextManagement bool
+}
+
+func inspectTopLevelFields(body []byte) topLevelFieldInspection {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return topLevelFieldInspection{}
+	}
+
+	keys := make([]string, 0, len(raw))
+	for key := range raw {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+
+	_, hasContextManagement := raw["context_management"]
+	return topLevelFieldInspection{Keys: keys, HasContextManagement: hasContextManagement}
+}
+
+type cacheControlInspection struct {
+	Count      int
+	ScopeCount int
+	Paths      []string
+	ScopePaths []string
+}
+
+func inspectCacheControl(body []byte) cacheControlInspection {
+	var raw interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return cacheControlInspection{}
+	}
+
+	result := cacheControlInspection{}
+	inspectCacheControlValue(raw, "$", &result)
+	return result
+}
+
+func inspectCacheControlValue(v interface{}, path string, result *cacheControlInspection) {
+	switch node := v.(type) {
+	case map[string]interface{}:
+		if cacheControl, ok := node["cache_control"].(map[string]interface{}); ok {
+			result.Count++
+			result.Paths = append(result.Paths, path+".cache_control")
+			if _, hasScope := cacheControl["scope"]; hasScope {
+				result.ScopeCount++
+				result.ScopePaths = append(result.ScopePaths, path+".cache_control.scope")
+			}
+		}
+		for key, child := range node {
+			inspectCacheControlValue(child, path+"."+key, result)
+		}
+	case []interface{}:
+		for i, child := range node {
+			inspectCacheControlValue(child, fmt.Sprintf("%s[%d]", path, i), result)
+		}
+	}
+}
+
+func stripCacheControlScope(v interface{}) {
+	switch node := v.(type) {
+	case map[string]interface{}:
+		if cacheControl, ok := node["cache_control"].(map[string]interface{}); ok {
+			delete(cacheControl, "scope")
+		}
+		for _, child := range node {
+			stripCacheControlScope(child)
+		}
+	case []interface{}:
+		for _, child := range node {
+			stripCacheControlScope(child)
+		}
+	}
 }
 
 // isBlankSSELine reports whether line consists solely of newline characters
