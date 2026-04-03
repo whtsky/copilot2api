@@ -10,6 +10,13 @@ Agent instructions for this repository:
 - Prefer short, grouped bullets under headings like `Features`, `Bug Fixes`, `Tests`, `CI`, or `Docs`.
 - Do not delete older release notes unless the user explicitly asks for a rewrite.
 
+Commit message style:
+
+- Use [Conventional Commits](https://www.conventionalcommits.org/): `type: lowercase description`.
+- Common types: `feat`, `fix`, `docs`, `refactor`, `ci`, `test`, `chore`.
+- Description should be lowercase, imperative mood, no trailing period (e.g., `feat: add gemini compatibility endpoints`).
+- Keep the subject line under 72 characters.
+
 Repository note:
 
 - `CLAUDE.md` should stay a symlink to this file so agent instructions have a single source of truth.
