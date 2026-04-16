@@ -154,9 +154,11 @@ func handleContent(delta OpenAIMessage, state *StreamState) []AnthropicStreamEve
 		content = *delta.Content.Text
 	}
 
-	// Close thinking block if open
+	signature := reasoningOpaque(delta)
+
+	// Close thinking block if open, attaching signature to the same block.
 	if state.ThinkingBlockOpen {
-		events = append(events, closeThinkingBlock(state)...)
+		events = append(events, closeThinkingBlock(state, signature)...)
 	}
 
 	// Close tool block if open
@@ -198,9 +200,13 @@ func handleContent(delta OpenAIMessage, state *StreamState) []AnthropicStreamEve
 func handleToolCalls(delta OpenAIMessage, state *StreamState) []AnthropicStreamEvent {
 	var events []AnthropicStreamEvent
 
-	// Close thinking block if open
+	signature := reasoningOpaque(delta)
+	consumedThinkingSignature := false
+
+	// Close thinking block if open, attaching signature to the same block.
 	if state.ThinkingBlockOpen {
-		events = append(events, closeThinkingBlock(state)...)
+		events = append(events, closeThinkingBlock(state, signature)...)
+		consumedThinkingSignature = signature != ""
 	}
 
 	// Handle reasoning opaque in tool calls
@@ -213,9 +219,11 @@ func handleToolCalls(delta OpenAIMessage, state *StreamState) []AnthropicStreamE
 		state.ContentBlockOpen = false
 	}
 
-	// Handle reasoning opaque
-	if delta.ReasoningOpaque != nil && *delta.ReasoningOpaque != "" {
-		events = append(events, handleReasoningOpaque(delta, state)...)
+	// Handle reasoning opaque only when there was no open thinking block to attach it to.
+	if !consumedThinkingSignature && !state.ThinkingBlockOpen {
+		if signature != "" {
+			events = append(events, handleReasoningOpaque(signature, state)...)
+		}
 	}
 
 	for _, toolCall := range delta.ToolCalls {
@@ -286,9 +294,13 @@ func handleToolCalls(delta OpenAIMessage, state *StreamState) []AnthropicStreamE
 func handleFinish(choice OpenAIChunkChoice, chunk OpenAIChatCompletionChunk, state *StreamState) []AnthropicStreamEvent {
 	var events []AnthropicStreamEvent
 
-	// Close thinking block if open
+	signature := reasoningOpaque(choice.Delta)
+	consumedThinkingSignature := false
+
+	// Close thinking block if open, attaching signature to the same block.
 	if state.ThinkingBlockOpen {
-		events = append(events, closeThinkingBlock(state)...)
+		events = append(events, closeThinkingBlock(state, signature)...)
+		consumedThinkingSignature = signature != ""
 	}
 
 	// Close any open content block
@@ -304,9 +316,11 @@ func handleFinish(choice OpenAIChunkChoice, chunk OpenAIChatCompletionChunk, sta
 		state.ContentBlockOpen = false
 		state.ContentBlockIndex++
 
-		// Handle reasoning opaque for non-tool blocks
-		if !toolBlockOpen {
-			events = append(events, handleReasoningOpaque(choice.Delta, state)...)
+		// Handle reasoning opaque for non-tool blocks when there was no open thinking block.
+		if !toolBlockOpen && !consumedThinkingSignature {
+			if signature != "" {
+				events = append(events, handleReasoningOpaque(signature, state)...)
+			}
 		}
 	}
 
@@ -344,10 +358,10 @@ func handleFinish(choice OpenAIChunkChoice, chunk OpenAIChatCompletionChunk, sta
 	return events
 }
 
-func handleReasoningOpaque(delta OpenAIMessage, state *StreamState) []AnthropicStreamEvent {
+func handleReasoningOpaque(signature string, state *StreamState) []AnthropicStreamEvent {
 	var events []AnthropicStreamEvent
 
-	if delta.ReasoningOpaque != nil && *delta.ReasoningOpaque != "" {
+	if signature != "" {
 		events = append(events,
 			AnthropicStreamEvent{
 				Type:  "content_block_start",
@@ -361,8 +375,16 @@ func handleReasoningOpaque(delta OpenAIMessage, state *StreamState) []AnthropicS
 				Type:  "content_block_delta",
 				Index: intPtr(state.ContentBlockIndex),
 				Delta: &AnthropicContentDelta{
+					Type:     "thinking_delta",
+					Thinking: "",
+				},
+			},
+			AnthropicStreamEvent{
+				Type:  "content_block_delta",
+				Index: intPtr(state.ContentBlockIndex),
+				Delta: &AnthropicContentDelta{
 					Type:      "signature_delta",
-					Signature: *delta.ReasoningOpaque,
+					Signature: signature,
 				},
 			},
 			AnthropicStreamEvent{
@@ -376,10 +398,20 @@ func handleReasoningOpaque(delta OpenAIMessage, state *StreamState) []AnthropicS
 	return events
 }
 
-func closeThinkingBlock(state *StreamState) []AnthropicStreamEvent {
+func closeThinkingBlock(state *StreamState, signature string) []AnthropicStreamEvent {
 	var events []AnthropicStreamEvent
 
 	if state.ThinkingBlockOpen {
+		if signature != "" {
+			events = append(events, AnthropicStreamEvent{
+				Type:  "content_block_delta",
+				Index: intPtr(state.ContentBlockIndex),
+				Delta: &AnthropicContentDelta{
+					Type:      "signature_delta",
+					Signature: signature,
+				},
+			})
+		}
 		events = append(events,
 			AnthropicStreamEvent{
 				Type:  "content_block_stop",
@@ -391,6 +423,13 @@ func closeThinkingBlock(state *StreamState) []AnthropicStreamEvent {
 	}
 
 	return events
+}
+
+func reasoningOpaque(delta OpenAIMessage) string {
+	if delta.ReasoningOpaque != nil {
+		return *delta.ReasoningOpaque
+	}
+	return ""
 }
 
 func isToolBlockOpen(state *StreamState) bool {

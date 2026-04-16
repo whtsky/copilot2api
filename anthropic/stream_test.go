@@ -361,6 +361,130 @@ func TestConvertOpenAIChunkToAnthropicEvents_Finish(t *testing.T) {
 	}
 }
 
+func TestConvertOpenAIChunkToAnthropicEvents_ThinkingFinishWithSignature(t *testing.T) {
+	state := NewStreamState()
+	state.MessageStartSent = true
+
+	thinkingChunk := OpenAIChatCompletionChunk{
+		ID:    "msg_123",
+		Model: "claude-3-sonnet-20240229",
+		Choices: []OpenAIChunkChoice{{
+			Index: 0,
+			Delta: OpenAIMessage{
+				ReasoningText: stringPtr("Let me think about this..."),
+			},
+		}},
+	}
+	if _, err := ConvertOpenAIChunkToAnthropicEvents(thinkingChunk, state); err != nil {
+		t.Fatalf("Thinking conversion failed: %v", err)
+	}
+
+	finishChunk := OpenAIChatCompletionChunk{
+		ID:    "msg_123",
+		Model: "claude-3-sonnet-20240229",
+		Choices: []OpenAIChunkChoice{{
+			Index: 0,
+			Delta: OpenAIMessage{
+				ReasoningOpaque: stringPtr("sig_123"),
+			},
+			FinishReason: "stop",
+		}},
+		Usage: &OpenAIUsage{PromptTokens: 10, CompletionTokens: 25},
+	}
+
+	events, err := ConvertOpenAIChunkToAnthropicEvents(finishChunk, state)
+	if err != nil {
+		t.Fatalf("Finish conversion failed: %v", err)
+	}
+
+	if len(events) != 4 {
+		t.Fatalf("Expected 4 events (signature + stop + delta + stop), got %d", len(events))
+	}
+
+	cd := contentDelta(t, events[0])
+	if cd.Type != "signature_delta" {
+		t.Fatalf("Expected first delta to be signature_delta, got %q", cd.Type)
+	}
+	if cd.Signature != "sig_123" {
+		t.Fatalf("Expected signature sig_123, got %q", cd.Signature)
+	}
+
+	if events[1].Type != "content_block_stop" {
+		t.Fatalf("Expected second event content_block_stop, got %q", events[1].Type)
+	}
+	if events[2].Type != "message_delta" {
+		t.Fatalf("Expected third event message_delta, got %q", events[2].Type)
+	}
+	if events[3].Type != "message_stop" {
+		t.Fatalf("Expected fourth event message_stop, got %q", events[3].Type)
+	}
+}
+
+func TestConvertOpenAIChunkToAnthropicEvents_ThinkingToToolCallWithSignature(t *testing.T) {
+	state := NewStreamState()
+	state.MessageStartSent = true
+
+	thinkingChunk := OpenAIChatCompletionChunk{
+		ID:    "msg_123",
+		Model: "claude-3-sonnet-20240229",
+		Choices: []OpenAIChunkChoice{{
+			Index: 0,
+			Delta: OpenAIMessage{
+				ReasoningText: stringPtr("Analyzing..."),
+			},
+		}},
+	}
+	if _, err := ConvertOpenAIChunkToAnthropicEvents(thinkingChunk, state); err != nil {
+		t.Fatalf("Thinking conversion failed: %v", err)
+	}
+
+	toolChunk := OpenAIChatCompletionChunk{
+		ID:    "msg_123",
+		Model: "claude-3-sonnet-20240229",
+		Choices: []OpenAIChunkChoice{{
+			Index: 0,
+			Delta: OpenAIMessage{
+				ReasoningOpaque: stringPtr("sig_456"),
+				ToolCalls: []OpenAIToolCall{{
+					Index: intPtr(0),
+					ID:    "call_1",
+					Function: OpenAIToolCallFunction{
+						Name: "search",
+					},
+				}},
+			},
+		}},
+	}
+
+	events, err := ConvertOpenAIChunkToAnthropicEvents(toolChunk, state)
+	if err != nil {
+		t.Fatalf("Tool conversion failed: %v", err)
+	}
+
+	if len(events) != 3 {
+		t.Fatalf("Expected 3 events (signature + stop + tool_start), got %d", len(events))
+	}
+
+	cd := contentDelta(t, events[0])
+	if cd.Type != "signature_delta" {
+		t.Fatalf("Expected first delta to be signature_delta, got %q", cd.Type)
+	}
+	if cd.Signature != "sig_456" {
+		t.Fatalf("Expected signature sig_456, got %q", cd.Signature)
+	}
+
+	if events[1].Type != "content_block_stop" {
+		t.Fatalf("Expected second event content_block_stop, got %q", events[1].Type)
+	}
+	if events[2].Type != "content_block_start" || events[2].ContentBlock == nil || events[2].ContentBlock.Type != "tool_use" {
+		t.Fatalf("Expected third event tool_use content_block_start, got %#v", events[2])
+	}
+
+	if events[2].Index == nil || *events[2].Index != 1 {
+		t.Fatalf("Expected tool block index 1, got %v", events[2].Index)
+	}
+}
+
 func TestConvertOpenAIChunkToAnthropicEvents_ComplexFlow(t *testing.T) {
 	state := NewStreamState()
 
