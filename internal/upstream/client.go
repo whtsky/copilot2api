@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -138,6 +139,18 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, []byte, err
 		req.Header.Set(k, v)
 	}
 
+	// Debug log: outgoing request
+	if bodyReader != nil {
+		if br, ok := bodyReader.(*bytes.Reader); ok {
+			rawBytes := make([]byte, br.Len())
+			br.Read(rawBytes)
+			br.Seek(0, io.SeekStart)
+			slog.Debug("upstream request", "method", method, "url", upstreamURL, "body", truncateStr(string(rawBytes), 2000))
+		}
+	} else {
+		slog.Debug("upstream request", "method", method, "url", upstreamURL)
+	}
+
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("request failed: %w", err)
@@ -149,6 +162,7 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, []byte, err
 		if len(errBody) > maxErrBody {
 			return nil, nil, fmt.Errorf("upstream error response too large (exceeds %d bytes)", maxErrBody)
 		}
+		slog.Debug("upstream error response", "endpoint", r.Endpoint, "status", resp.StatusCode, "body", truncateStr(string(errBody), 2000))
 		return nil, nil, &UpstreamError{
 			StatusCode: resp.StatusCode,
 			Body:       errBody,
@@ -167,5 +181,13 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, []byte, err
 	if len(respData) > maxRespBody {
 		return nil, nil, fmt.Errorf("upstream response too large (exceeds %d bytes)", maxRespBody)
 	}
+	slog.Debug("upstream response", "endpoint", r.Endpoint, "status", resp.StatusCode, "body", truncateStr(string(respData), 2000))
 	return nil, respData, nil
+}
+
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

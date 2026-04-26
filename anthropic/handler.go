@@ -78,7 +78,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	upgradedModel, modelInfo, capabilityFetchFailed := h.getModelInfoWithUpgrade(r.Context(), anthropicReq.Model, h.noModelUpgrade)
-	if upgradedModel != anthropicReq.Model {
+	modelUpgraded := upgradedModel != anthropicReq.Model
+	if modelUpgraded {
 		slog.Debug("auto-upgraded model", "from", anthropicReq.Model, "to", upgradedModel)
 		anthropicReq.Model = upgradedModel
 	}
@@ -91,8 +92,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Only re-encode the body for native passthrough (the only path that
 		// sends raw reqBody). Responses and Chat Completions paths use the
 		// parsed struct, so they skip this JSON round-trip.
-		if modelChanged || cacheControlInfo.ScopeCount > 0 || topLevelInfo.HasContextManagement {
-			newBody, err := normalizeNativeMessagesBody(reqBody, resolvedModel, modelChanged)
+		if modelChanged || modelUpgraded || cacheControlInfo.ScopeCount > 0 || topLevelInfo.HasContextManagement {
+			newBody, err := normalizeNativeMessagesBody(reqBody, anthropicReq.Model, modelChanged || modelUpgraded)
 			if err != nil {
 				WriteAnthropicError(w, http.StatusBadRequest, AnthropicErrorTypeInvalidRequest, fmt.Sprintf("Invalid JSON: %v", err))
 				return
