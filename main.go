@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/whtsky/copilot2api/ampsearch"
 	"github.com/whtsky/copilot2api/anthropic"
 	"github.com/whtsky/copilot2api/auth"
 	"github.com/whtsky/copilot2api/gemini"
@@ -156,6 +157,13 @@ func main() {
 	// AI inference stays on Copilot API (routes above); only metadata hits ampcode.com.
 	ampBackend, _ := url.Parse("https://ampcode.com")
 	ampReverseProxy := newAmpReverseProxy(ampBackend)
+	searchHandler := ampsearch.NewHandler(ampsearch.NewModelBackend(upstreamClient, ""))
+	mux.HandleFunc("/api/internal", func(w http.ResponseWriter, r *http.Request) {
+		if searchHandler.TryServe(w, r) {
+			return
+		}
+		ampReverseProxy.ServeHTTP(w, r)
+	})
 	mux.Handle("/api/", ampReverseProxy)
 	mux.HandleFunc("/amp/v1/login", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "https://ampcode.com/login", http.StatusFound)
