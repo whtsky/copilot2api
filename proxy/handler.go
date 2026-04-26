@@ -25,9 +25,9 @@ type Handler struct {
 
 // NewHandler creates a new proxy handler.
 // The transport is used for upstream HTTP requests (pass nil to create a new one).
-func NewHandler(authClient *auth.Client, transport *http.Transport, mc *models.Cache) *Handler {
+func NewHandler(authClient *auth.Client, transport *http.Transport, mc *models.Cache, debug bool) *Handler {
 	return &Handler{
-		upstream:    upstream.NewClient(authClient, transport),
+		upstream:    upstream.NewClient(authClient, transport, debug),
 		authClient:  authClient,
 		modelsCache: mc,
 	}

@@ -140,7 +140,7 @@ func TestHandler_ServeHTTP_Routing(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
-	uc := upstream.NewClient(tp, nil)
+	uc := upstream.NewClient(tp, nil, false)
 	handler := &Handler{
 		upstream:    uc,
 		modelsCache: models.NewCache(uc, 5*time.Minute),
@@ -177,7 +177,7 @@ func TestHandler_HandleModels(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
-	uc := upstream.NewClient(tp, nil)
+	uc := upstream.NewClient(tp, nil, false)
 	handler := &Handler{
 		upstream:    uc,
 		modelsCache: models.NewCache(uc, 5*time.Minute),
@@ -219,7 +219,7 @@ func TestHandler_HandlePassthrough(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
-	uc := upstream.NewClient(tp, nil)
+	uc := upstream.NewClient(tp, nil, false)
 	handler := &Handler{
 		upstream:    uc,
 		modelsCache: models.NewCache(uc, 5*time.Minute),
@@ -345,7 +345,7 @@ func TestHandlePassthrough_StreamingNetworkFailure_Returns502(t *testing.T) {
 
 	tp := &stubTokenProvider{baseURL: "http://" + addr}
 	handler := &Handler{
-		upstream: upstream.NewClient(tp, nil),
+		upstream: upstream.NewClient(tp, nil, false),
 	}
 
 	body := `{"model":"gpt-4","messages":[],"stream":true}`

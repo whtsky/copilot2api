@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Features
+
+- Add local amp search support (`webSearch2`) using the Copilot Responses API with `web_search` tool (`gpt-5-mini` by default), and page extraction (`extractWebPageContent`) via Jina Reader, so amp CLI web search works without a paid ampcode.com account
+- Auto-upgrade models to the best available variant (e.g. `claude-opus-4.7` → `claude-opus-4.7-1m-internal`) based on upstream model list, enabling features like `effort: high` that require extended variants
+
 ## [0.3.1] - 2026-04-26
 
 ### Bug Fixes

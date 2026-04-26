@@ -63,7 +63,7 @@ func TestResolveTargetEndpoint_NoModelField(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
-	uc := upstream.NewClient(tp, nil)
+	uc := upstream.NewClient(tp, nil, false)
 	h := &Handler{
 		upstream:    uc,
 		modelsCache: models.NewCache(uc, 5*time.Minute),
@@ -87,7 +87,7 @@ func TestResolveTargetEndpoint_UnknownModel(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
-	uc := upstream.NewClient(tp, nil)
+	uc := upstream.NewClient(tp, nil, false)
 	h := &Handler{
 		upstream:    uc,
 		modelsCache: models.NewCache(uc, 5*time.Minute),
@@ -111,7 +111,7 @@ func TestResolveTargetEndpoint_ModelSupportsBoth(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
-	uc := upstream.NewClient(tp, nil)
+	uc := upstream.NewClient(tp, nil, false)
 	h := &Handler{
 		upstream:    uc,
 		modelsCache: models.NewCache(uc, 5*time.Minute),
@@ -144,7 +144,7 @@ func TestResolveTargetEndpoint_NeedsConversion(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
-	uc := upstream.NewClient(tp, nil)
+	uc := upstream.NewClient(tp, nil, false)
 	h := &Handler{
 		upstream:    uc,
 		modelsCache: models.NewCache(uc, 5*time.Minute),
@@ -176,7 +176,7 @@ func TestResolveTargetEndpoint_ModelSupportsNeither(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
-	uc := upstream.NewClient(tp, nil)
+	uc := upstream.NewClient(tp, nil, false)
 	h := &Handler{
 		upstream:    uc,
 		modelsCache: models.NewCache(uc, 5*time.Minute),
@@ -237,7 +237,7 @@ func TestSmartRouting_ChatToResponsesNonStreaming(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
-	uc := upstream.NewClient(tp, nil)
+	uc := upstream.NewClient(tp, nil, false)
 	h := &Handler{
 		upstream:    uc,
 		modelsCache: models.NewCache(uc, 5*time.Minute),
@@ -316,7 +316,7 @@ func TestSmartRouting_ResponsesToChatNonStreaming(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
-	uc := upstream.NewClient(tp, nil)
+	uc := upstream.NewClient(tp, nil, false)
 	h := &Handler{
 		upstream:    uc,
 		modelsCache: models.NewCache(uc, 5*time.Minute),
@@ -362,7 +362,7 @@ func TestSmartRouting_PassthroughWhenModelSupportsEndpoint(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
-	uc := upstream.NewClient(tp, nil)
+	uc := upstream.NewClient(tp, nil, false)
 	h := &Handler{
 		upstream:    uc,
 		modelsCache: models.NewCache(uc, 5*time.Minute),
@@ -418,7 +418,7 @@ func TestSmartRouting_ChatToResponsesStreaming(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
-	uc := upstream.NewClient(tp, nil)
+	uc := upstream.NewClient(tp, nil, false)
 	h := &Handler{
 		upstream:    uc,
 		modelsCache: models.NewCache(uc, 5*time.Minute),
@@ -468,7 +468,7 @@ func TestSmartRouting_ResponsesToChatStreaming(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
-	uc := upstream.NewClient(tp, nil)
+	uc := upstream.NewClient(tp, nil, false)
 	h := &Handler{
 		upstream:    uc,
 		modelsCache: models.NewCache(uc, 5*time.Minute),

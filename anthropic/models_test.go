@@ -82,3 +82,32 @@ func TestResolveModelAlias(t *testing.T) {
 		})
 	}
 }
+
+func TestUpgradeModel(t *testing.T) {
+	available := map[string]*models.Info{
+		"claude-opus-4.7":              {ID: "claude-opus-4.7"},
+		"claude-opus-4.7-1m-internal":  {ID: "claude-opus-4.7-1m-internal"},
+		"claude-opus-4.6":              {ID: "claude-opus-4.6"},
+		"claude-opus-4.6-1m":           {ID: "claude-opus-4.6-1m"},
+		"claude-sonnet-4.6":            {ID: "claude-sonnet-4.6"},
+	}
+
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"claude-opus-4.7", "claude-opus-4.7-1m-internal"},
+		{"claude-opus-4.6", "claude-opus-4.6-1m"},
+		{"claude-sonnet-4.6", "claude-sonnet-4.6"},
+		{"claude-sonnet-5.0", "claude-sonnet-5.0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := upgradeModel(tt.input, available)
+			if got != tt.want {
+				t.Errorf("upgradeModel(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}

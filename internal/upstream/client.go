@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -26,6 +27,7 @@ type TokenProvider interface {
 type Client struct {
 	TokenProvider TokenProvider
 	HTTPClient    *http.Client
+	Debug         bool
 }
 
 // NewTransport creates a shared http.Transport suitable for upstream requests.
@@ -44,7 +46,7 @@ func NewTransport() *http.Transport {
 // NewClient creates a new upstream Client.
 // If transport is non-nil it is used for the underlying http.Client;
 // otherwise a new Transport is created.
-func NewClient(tp TokenProvider, transport *http.Transport) *Client {
+func NewClient(tp TokenProvider, transport *http.Transport, debug bool) *Client {
 	if transport == nil {
 		transport = NewTransport()
 	}
@@ -55,6 +57,7 @@ func NewClient(tp TokenProvider, transport *http.Transport) *Client {
 			// Non-streaming requests use per-request context timeouts instead.
 			Transport: transport,
 		},
+		Debug: debug,
 	}
 }
 
@@ -138,6 +141,20 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, []byte, err
 		req.Header.Set(k, v)
 	}
 
+	// Debug log: outgoing request
+	if c.Debug {
+		if bodyReader != nil {
+			if br, ok := bodyReader.(*bytes.Reader); ok {
+				rawBytes := make([]byte, br.Len())
+				br.Read(rawBytes)
+				br.Seek(0, io.SeekStart)
+				slog.Debug("upstream request", "method", method, "url", upstreamURL, "body", truncateStr(string(rawBytes), 2000))
+			}
+		} else {
+			slog.Debug("upstream request", "method", method, "url", upstreamURL)
+		}
+	}
+
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("request failed: %w", err)
@@ -149,6 +166,7 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, []byte, err
 		if len(errBody) > maxErrBody {
 			return nil, nil, fmt.Errorf("upstream error response too large (exceeds %d bytes)", maxErrBody)
 		}
+		slog.Debug("upstream error response", "endpoint", r.Endpoint, "status", resp.StatusCode, "body", truncateStr(string(errBody), 2000))
 		return nil, nil, &UpstreamError{
 			StatusCode: resp.StatusCode,
 			Body:       errBody,
@@ -167,5 +185,13 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, []byte, err
 	if len(respData) > maxRespBody {
 		return nil, nil, fmt.Errorf("upstream response too large (exceeds %d bytes)", maxRespBody)
 	}
+	slog.Debug("upstream response", "endpoint", r.Endpoint, "status", resp.StatusCode, "body", truncateStr(string(respData), 2000))
 	return nil, respData, nil
+}
+
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

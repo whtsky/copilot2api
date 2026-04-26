@@ -108,11 +108,11 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
-### 1M Context Window
+### Model Auto-Upgrade
 
-copilot2api supports Claude 1M context models. When Claude Code sends the `anthropic-beta: context-1m-...` header, the proxy automatically appends `-1m` to the model ID (e.g. `claude-opus-4.6` → `claude-opus-4.6-1m`) so Copilot routes to the 1M variant.
+copilot2api automatically upgrades models to the best available variant in the upstream model list. For example, if `claude-opus-4.7-1m-internal` is available, a request for `claude-opus-4.7` will automatically use it. This enables features like 1M context windows and `effort: high` that are only supported by extended variants.
 
-To use it, select the 1M model variant in Claude Code via the `/model` command (e.g. `Opus (1M)`). Without this, Claude Code defaults to the standard 200K context window.
+The upgrade priority is: `-1m-internal` > `-1m` > base model.
 
 ## Usage with Codex
 
@@ -158,6 +158,8 @@ Or add to `~/.config/amp/settings.json`:
 ```
 
 Chat completions, tool calls, and image input all route through Copilot API. Login and management routes (threads, telemetry) are proxied to `ampcode.com` — a free amp account is required for authentication.
+
+Web search (`webSearch2`) is handled locally via the Copilot Responses API with `web_search` tool (using `gpt-5-mini` by default). Page extraction (`extractWebPageContent`) uses [Jina Reader](https://jina.ai/reader/) — set `JINA_API_KEY` for higher rate limits (optional). No paid ampcode.com account needed.
 
 <details>
 <summary>Usage with curl</summary>
@@ -237,6 +239,8 @@ message = client.messages.create(
 | `/amp/v1/chat/completions` | POST | AmpCode chat completions (via Copilot API) |
 | `/amp/v1/models` | GET | AmpCode model listing |
 | `/api/provider/*` | POST | AmpCode provider-specific routes |
+| `/api/internal?webSearch2` | POST | AmpCode web search (via Copilot Responses API) |
+| `/api/internal?extractWebPageContent` | POST | AmpCode page extraction (via Jina Reader) |
 | `/api/*` | ANY | AmpCode management proxy to ampcode.com |
 | `/usage` | GET | Copilot usage and quota info |
 
@@ -264,6 +268,8 @@ Environment variables are used as defaults when flags are not provided:
 | `COPILOT2API_PORT` | Server port | `7777` |
 | `COPILOT2API_TOKEN_DIR` | Token storage directory | `~/.config/copilot2api` |
 | `COPILOT2API_DEBUG` | Enable debug logging (`true`/`false`, `1`/`0`) | `false` |
+| `COPILOT2API_NO_MODEL_UPGRADE` | Disable model auto-upgrade (`true`/`false`, `1`/`0`) | `false` |
+| `JINA_API_KEY` | Jina API key for amp page extraction (optional) | — |
 
 CLI flags take precedence over environment variables.
 

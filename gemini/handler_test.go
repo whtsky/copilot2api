@@ -44,7 +44,7 @@ func TestHandler_ModelsListsGeminiMethods(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
-	uc := upstream.NewClient(tp, nil)
+	uc := upstream.NewClient(tp, nil, false)
 	h := &Handler{upstream: uc, models: models.NewCache(uc, 5*time.Minute)}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1beta/models", nil)
@@ -116,7 +116,7 @@ func TestHandler_GenerateContent_NonStreaming(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
-	uc := upstream.NewClient(tp, nil)
+	uc := upstream.NewClient(tp, nil, false)
 	h := &Handler{upstream: uc, models: models.NewCache(uc, 5*time.Minute)}
 
 	body := "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"hello\"}]}]}"
@@ -162,7 +162,7 @@ func TestHandler_StreamGenerateContent_SSE(t *testing.T) {
 	defer fakeUpstream.Close()
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
-	uc := upstream.NewClient(tp, nil)
+	uc := upstream.NewClient(tp, nil, false)
 	h := &Handler{upstream: uc, models: models.NewCache(uc, 5*time.Minute)}
 
 	body := "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"hello\"}]}]}"
