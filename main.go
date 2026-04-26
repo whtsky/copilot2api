@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/whtsky/copilot2api/amplocal"
 	"github.com/whtsky/copilot2api/ampsearch"
 	"github.com/whtsky/copilot2api/anthropic"
 	"github.com/whtsky/copilot2api/auth"
@@ -33,8 +34,11 @@ func main() {
 		tokenDir    = flag.String("token-dir", "", "Token storage directory (env: COPILOT2API_TOKEN_DIR, default: ~/.config/copilot2api)")
 		showVersion = flag.Bool("version", false, "Show version and exit")
 		debug       = flag.Bool("debug", false, "Enable debug logging (env: COPILOT2API_DEBUG)")
+
 	)
 	flag.Parse()
+
+
 
 	// Apply debug env var
 	if !*debug {
@@ -164,12 +168,36 @@ func main() {
 	ampBackend, _ := url.Parse("https://ampcode.com")
 	ampReverseProxy := newAmpReverseProxy(ampBackend)
 	searchHandler := ampsearch.NewHandler(ampsearch.NewModelBackend(upstreamClient, ""))
+
+	// Amp local mode: serve management APIs from local thread data (always enabled).
+	ampThreadsDir := os.Getenv("AMP_THREADS_DIR")
+	if ampThreadsDir == "" {
+		// Default: store threads alongside credentials in the config directory.
+		homeDir, _ := os.UserHomeDir()
+		ampThreadsDir = filepath.Join(homeDir, ".config", "copilot2api", "threads")
+	}
+	slog.Info("amp local mode enabled", "threads_dir", ampThreadsDir)
+	localState := amplocal.NewState(ampThreadsDir)
+	localHandler := amplocal.NewHandler(localState)
+
 	mux.HandleFunc("/api/internal", func(w http.ResponseWriter, r *http.Request) {
 		if searchHandler.TryServe(w, r) {
 			return
 		}
+		if localHandler.TryServeInternal(w, r) {
+			return
+		}
 		ampReverseProxy.ServeHTTP(w, r)
 	})
+
+	mux.HandleFunc("/api/threads/find", localHandler.ServeThreadsFind)
+	mux.HandleFunc("/api/threads/", localHandler.ServeThreadMarkdown)
+	mux.HandleFunc("/api/telemetry", localHandler.ServeTelemetry)
+	mux.HandleFunc("/api/durable-thread-workers/", localHandler.ServeDurableThreadWorker)
+	mux.HandleFunc("/api/users/", localHandler.ServeUsers)
+	mux.HandleFunc("/api/attachments", localHandler.ServeAttachments)
+	mux.HandleFunc("/news.rss", localHandler.ServeNewsRSS)
+
 	mux.Handle("/api/", ampReverseProxy)
 	mux.HandleFunc("/amp/v1/login", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "https://ampcode.com/login", http.StatusFound)
