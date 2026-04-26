@@ -140,15 +140,17 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, []byte, err
 	}
 
 	// Debug log: outgoing request
-	if bodyReader != nil {
-		if br, ok := bodyReader.(*bytes.Reader); ok {
-			rawBytes := make([]byte, br.Len())
-			br.Read(rawBytes)
-			br.Seek(0, io.SeekStart)
-			slog.Debug("upstream request", "method", method, "url", upstreamURL, "body", truncateStr(string(rawBytes), 2000))
+	if slog.Default().Enabled(reqCtx, slog.LevelDebug) {
+		if bodyReader != nil {
+			if br, ok := bodyReader.(*bytes.Reader); ok {
+				rawBytes := make([]byte, br.Len())
+				br.Read(rawBytes)
+				br.Seek(0, io.SeekStart)
+				slog.Debug("upstream request", "method", method, "url", upstreamURL, "body", truncateStr(string(rawBytes), 2000))
+			}
+		} else {
+			slog.Debug("upstream request", "method", method, "url", upstreamURL)
 		}
-	} else {
-		slog.Debug("upstream request", "method", method, "url", upstreamURL)
 	}
 
 	resp, err := c.HTTPClient.Do(req)
