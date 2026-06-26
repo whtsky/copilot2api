@@ -22,8 +22,13 @@ func ConvertAnthropicToOpenAI(req AnthropicMessagesRequest) (OpenAIChatCompletio
 		openAIReq.StreamOptions = &OpenAIStreamOptions{IncludeUsage: true}
 	}
 
-	// Map thinking configuration
-	if req.Thinking != nil && req.Thinking.BudgetTokens != nil {
+	// Reasoning effort: prefer output_config.effort (modern Anthropic enum)
+	// over thinking.budget_tokens (legacy numeric). Forward effort verbatim;
+	// fall back to bucketing the budget when only the legacy field is set.
+	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
+		effort := req.OutputConfig.Effort
+		openAIReq.ReasoningEffort = &effort
+	} else if req.Thinking != nil && req.Thinking.BudgetTokens != nil {
 		openAIReq.ThinkingBudget = req.Thinking.BudgetTokens
 	}
 

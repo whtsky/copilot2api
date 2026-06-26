@@ -8,13 +8,12 @@ import (
 
 // resolveReasoningEffort determines the reasoning effort level for the Responses API.
 // OutputConfig.Effort takes priority when set; otherwise falls back to thinking budget.
+// Effort strings are forwarded verbatim — the upstream model's
+// capabilities.supports.reasoning_effort enum is the source of truth for what's
+// accepted (e.g. xhigh on GPT-5, max on Anthropic, minimal on Gemini Flash).
 func resolveReasoningEffort(thinking *AnthropicThinking, outputConfig *AnthropicOutputConfig) string {
 	if outputConfig != nil && outputConfig.Effort != "" {
-		effort := outputConfig.Effort
-		if effort == "max" {
-			effort = "high" // Responses API doesn't support "max"
-		}
-		return effort
+		return outputConfig.Effort
 	}
 	return thinkingEffort(thinking)
 }
