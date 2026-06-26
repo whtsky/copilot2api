@@ -5,7 +5,17 @@
 ### Features
 
 - Add local amp search support (`webSearch2`) using the Copilot Responses API with `web_search` tool (`gpt-5-mini` by default), and page extraction (`extractWebPageContent`) via Jina Reader, so amp CLI web search works without a paid ampcode.com account
-- Auto-upgrade models to the best available variant (e.g. `claude-opus-4.7` → `claude-opus-4.7-1m-internal`) based on upstream model list, enabling features like `effort: high` that require extended variants
+- Forward `reasoning_effort` verbatim on OpenAI `/v1/chat/completions` requests instead of dropping it during smart-routing to `/responses`. Values like `xhigh`, `minimal`, and `none` now reach the model — accept any string and let upstream validate against the per-model `capabilities.supports.reasoning_effort` enum
+- Honor `output_config.effort` on Anthropic `/v1/messages` requests routed to OpenAI Chat Completions, in addition to the existing Responses path
+
+### Bug Fixes
+
+- Stop flattening Anthropic `output_config.effort: "max"` to `"high"` when routing to OpenAI Responses — `max` (and `xhigh`) are first-class effort values per current Anthropic SDK and Copilot model capabilities
+- Stop bucketing OpenAI Responses `reasoning.effort` into the lossy `thinking_budget` numeric when smart-routing to `/chat/completions`; forward the effort string directly
+
+### Breaking Changes
+
+- Remove model auto-upgrade and the `COPILOT2API_NO_MODEL_UPGRADE` env var. Requests for a base model id (e.g. `claude-opus-4.7`) are no longer silently rewritten to `-1m-internal` / `-1m` variants — pass the variant id explicitly if you want it
 
 ## [0.3.1] - 2026-04-26
 

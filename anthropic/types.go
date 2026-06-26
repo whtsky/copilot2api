@@ -34,7 +34,7 @@ type AnthropicThinking struct {
 
 // AnthropicOutputConfig represents output configuration
 type AnthropicOutputConfig struct {
-	Effort string `json:"effort,omitempty"` // "low", "medium", "high", "max"
+	Effort string `json:"effort,omitempty"` // "low", "medium", "high", "xhigh", "max"
 }
 
 // AnthropicSystem can be string or []AnthropicTextBlock

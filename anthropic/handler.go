@@ -19,18 +19,16 @@ import (
 
 // Handler handles Anthropic Messages API requests
 type Handler struct {
-	upstream       *upstream.Client
-	models         *models.Cache
-	noModelUpgrade bool
+	upstream *upstream.Client
+	models   *models.Cache
 }
 
 // NewHandler creates a new Anthropic handler.
 // The transport is used for upstream HTTP requests (pass nil to create a new one).
-func NewHandler(authClient upstream.TokenProvider, transport *http.Transport, mc *models.Cache, noModelUpgrade bool, debug bool) *Handler {
+func NewHandler(authClient upstream.TokenProvider, transport *http.Transport, mc *models.Cache, debug bool) *Handler {
 	return &Handler{
-		upstream:       upstream.NewClient(authClient, transport, debug),
-		models:         mc,
-		noModelUpgrade: noModelUpgrade,
+		upstream: upstream.NewClient(authClient, transport, debug),
+		models:   mc,
 	}
 }
 
@@ -77,12 +75,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.Info("anthropic request", "endpoint", "/v1/messages", "model", anthropicReq.Model, "stream", anthropicReq.Stream, "messages", len(anthropicReq.Messages), "route", route, "duration_ms", time.Since(start).Milliseconds())
 	}()
 
-	upgradedModel, modelInfo, capabilityFetchFailed := h.getModelInfoWithUpgrade(r.Context(), anthropicReq.Model, h.noModelUpgrade)
-	modelUpgraded := upgradedModel != anthropicReq.Model
-	if modelUpgraded {
-		slog.Debug("auto-upgraded model", "from", anthropicReq.Model, "to", upgradedModel)
-		anthropicReq.Model = upgradedModel
-	}
+	modelInfo, capabilityFetchFailed := h.getModelInfo(r.Context(), anthropicReq.Model)
 
 	if modelSupportsEndpoint(modelInfo, "/v1/messages") {
 		route = "native"
@@ -92,8 +85,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Only re-encode the body for native passthrough (the only path that
 		// sends raw reqBody). Responses and Chat Completions paths use the
 		// parsed struct, so they skip this JSON round-trip.
-		if modelChanged || modelUpgraded || cacheControlInfo.ScopeCount > 0 || topLevelInfo.HasContextManagement {
-			newBody, err := normalizeNativeMessagesBody(reqBody, anthropicReq.Model, modelChanged || modelUpgraded)
+		if modelChanged || cacheControlInfo.ScopeCount > 0 || topLevelInfo.HasContextManagement {
+			newBody, err := normalizeNativeMessagesBody(reqBody, anthropicReq.Model, modelChanged)
 			if err != nil {
 				WriteAnthropicError(w, http.StatusBadRequest, AnthropicErrorTypeInvalidRequest, fmt.Sprintf("Invalid JSON: %v", err))
 				return

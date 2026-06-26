@@ -53,37 +53,16 @@ func resolveModelAlias(modelID string) string {
 	return modelID
 }
 
-// modelUpgradeSuffixes lists suffixes to try (in order) when upgrading a model
-// to the best available variant. The first match wins.
-var modelUpgradeSuffixes = []string{"-1m-internal", "-1m"}
-
-// upgradeModel returns the best available variant of modelID by checking for
-// known suffixes in the upstream model list. Returns the original if no better variant exists.
-func upgradeModel(modelID string, available map[string]*models.Info) string {
-	for _, suffix := range modelUpgradeSuffixes {
-		candidate := modelID + suffix
-		if _, ok := available[candidate]; ok {
-			slog.Debug("auto-upgraded model", "from", modelID, "to", candidate)
-			return candidate
-		}
-	}
-	return modelID
-}
-
-// getModelInfoWithUpgrade fetches model info and auto-upgrades the model
-// to the best available variant (e.g. appending "-1m-internal" if available).
-// Set skipUpgrade to true to disable auto-upgrade.
-func (h *Handler) getModelInfoWithUpgrade(ctx context.Context, modelID string, skipUpgrade bool) (string, *models.Info, bool) {
+// getModelInfo fetches model info for the given model ID. The returned bool
+// reports whether the upstream models fetch failed (in which case callers
+// should fall back to a default route).
+func (h *Handler) getModelInfo(ctx context.Context, modelID string) (*models.Info, bool) {
 	infoMap, err := h.models.GetInfo(ctx)
 	if err != nil {
 		slog.Error("failed to fetch models for capability detection", "error", err)
-		return modelID, nil, true
+		return nil, true
 	}
-
-	if !skipUpgrade {
-		modelID = upgradeModel(modelID, infoMap)
-	}
-	return modelID, infoMap[modelID], false
+	return infoMap[modelID], false
 }
 
 func modelSupportsEndpoint(info *models.Info, endpoint string) bool {

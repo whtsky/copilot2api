@@ -21,6 +21,11 @@ type OpenAIChatCompletionsRequest struct {
 	User              string                     `json:"user,omitempty"`
 	Metadata          map[string]string          `json:"metadata,omitempty"`
 	ThinkingBudget    *int                       `json:"thinking_budget,omitempty"`
+	// ReasoningEffort is forwarded verbatim. Per-model vocabulary varies
+	// (see /v1/models capabilities.supports.reasoning_effort): GPT-5 series
+	// accepts none|minimal|low|medium|high|xhigh; Gemini Flash adds minimal
+	// without xhigh. Pass any string through and let upstream validate.
+	ReasoningEffort   *string                    `json:"reasoning_effort,omitempty"`
 	ReasoningText     *string                    `json:"reasoning_text,omitempty"`
 	ReasoningOpaque   *string                    `json:"reasoning_opaque,omitempty"`
 	ResponseFormat    *ResponseFormat            `json:"response_format,omitempty"`

@@ -484,6 +484,65 @@ func floatPtr(f float64) *float64 {
 	return &f
 }
 
+func TestConvertAnthropicToOpenAI_OutputConfigEffort(t *testing.T) {
+	// output_config.effort takes priority over thinking.budget_tokens and
+	// is forwarded verbatim to ReasoningEffort — no lossy bucketing.
+	budget := 4000
+	req := AnthropicMessagesRequest{
+		Model:     "claude-sonnet-4.6",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: AnthropicContent{Text: stringPtr("hi")}},
+		},
+		OutputConfig: &AnthropicOutputConfig{Effort: "xhigh"},
+		Thinking:     &AnthropicThinking{Type: "enabled", BudgetTokens: &budget},
+	}
+
+	openAIReq, err := ConvertAnthropicToOpenAI(req)
+	if err != nil {
+		t.Fatalf("Conversion failed: %v", err)
+	}
+
+	if openAIReq.ReasoningEffort == nil {
+		t.Fatal("ReasoningEffort should not be nil when output_config.effort is set")
+	}
+	if *openAIReq.ReasoningEffort != "xhigh" {
+		t.Errorf("ReasoningEffort = %q, want xhigh", *openAIReq.ReasoningEffort)
+	}
+	if openAIReq.ThinkingBudget != nil {
+		t.Errorf("ThinkingBudget should not be set when effort wins, got %d", *openAIReq.ThinkingBudget)
+	}
+}
+
+func TestConvertAnthropicToOpenAI_ThinkingBudgetFallback(t *testing.T) {
+	// When only legacy thinking.budget_tokens is present, it still flows
+	// through as ThinkingBudget — no effort string is invented.
+	budget := 8000
+	req := AnthropicMessagesRequest{
+		Model:     "claude-sonnet-4.6",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: AnthropicContent{Text: stringPtr("hi")}},
+		},
+		Thinking: &AnthropicThinking{Type: "enabled", BudgetTokens: &budget},
+	}
+
+	openAIReq, err := ConvertAnthropicToOpenAI(req)
+	if err != nil {
+		t.Fatalf("Conversion failed: %v", err)
+	}
+
+	if openAIReq.ReasoningEffort != nil {
+		t.Errorf("ReasoningEffort should be nil when only budget is set, got %q", *openAIReq.ReasoningEffort)
+	}
+	if openAIReq.ThinkingBudget == nil {
+		t.Fatal("ThinkingBudget should pass through")
+	}
+	if *openAIReq.ThinkingBudget != 8000 {
+		t.Errorf("ThinkingBudget = %d, want 8000", *openAIReq.ThinkingBudget)
+	}
+}
+
 func TestConvertOpenAIToAnthropic_SplitChoices(t *testing.T) {
 	// Copilot API returns split choices for Claude models:
 	// text in choice 0, tool_calls in choice 1

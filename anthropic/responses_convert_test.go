@@ -90,7 +90,8 @@ func TestResolveReasoningEffort(t *testing.T) {
 		{"output_config low", nil, effort("low"), "low"},
 		{"output_config medium", nil, effort("medium"), "medium"},
 		{"output_config high", nil, effort("high"), "high"},
-		{"output_config max maps to high", nil, effort("max"), "high"},
+		{"output_config max forwarded verbatim", nil, effort("max"), "max"},
+		{"output_config xhigh forwarded verbatim", nil, effort("xhigh"), "xhigh"},
 		{"output_config overrides thinking", budget(4000), effort("high"), "high"},
 		{"output_config empty falls back to thinking", budget(4000), &AnthropicOutputConfig{}, "low"},
 	}
