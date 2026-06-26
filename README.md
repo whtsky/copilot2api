@@ -108,12 +108,6 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
-### Model Auto-Upgrade
-
-copilot2api automatically upgrades models to the best available variant in the upstream model list. For example, if `claude-opus-4.7-1m-internal` is available, a request for `claude-opus-4.7` will automatically use it. This enables features like 1M context windows and `effort: high` that are only supported by extended variants.
-
-The upgrade priority is: `-1m-internal` > `-1m` > base model.
-
 ## Usage with Codex
 
 Add to `~/.codex/config.toml`:
@@ -268,7 +262,6 @@ Environment variables are used as defaults when flags are not provided:
 | `COPILOT2API_PORT` | Server port | `7777` |
 | `COPILOT2API_TOKEN_DIR` | Token storage directory | `~/.config/copilot2api` |
 | `COPILOT2API_DEBUG` | Enable debug logging (`true`/`false`, `1`/`0`) | `false` |
-| `COPILOT2API_NO_MODEL_UPGRADE` | Disable model auto-upgrade (`true`/`false`, `1`/`0`) | `false` |
 | `JINA_API_KEY` | Jina API key for amp page extraction (optional) | — |
 
 CLI flags take precedence over environment variables.
