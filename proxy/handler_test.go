@@ -28,13 +28,13 @@ func TestAddCopilotHeaders(t *testing.T) {
 	// Test required headers
 	expectedHeaders := map[string]string{
 		"Authorization":         "Bearer " + token,
-		"User-Agent":            copilot.CopilotUserAgent,
-		"Editor-Version":        copilot.EditorVersion,
-		"Editor-Plugin-Version": copilot.EditorPluginVersion,
+		"User-Agent":            "GitHubCopilotChat/0.58.0",
+		"Editor-Version":        "vscode/1.120.0",
+		"Editor-Plugin-Version": "copilot-chat/0.58.0",
 		"Copilot-Integration-Id": "vscode-chat",
 		"Openai-Intent":         "conversation-agent",
 		"Content-Type":          "application/json",
-		"X-Github-Api-Version":  "2025-04-01",
+		"X-Github-Api-Version":  "2026-06-01",
 	}
 
 	for header, expectedValue := range expectedHeaders {

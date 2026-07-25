@@ -23,6 +23,12 @@ type TokenProvider interface {
 	GetBaseURL() string
 }
 
+// GitHubTokenProvider supplies the long-lived GitHub OAuth token used by
+// Copilot's developer CLI model-catalog fallback.
+type GitHubTokenProvider interface {
+	GetGitHubToken(ctx context.Context) (string, error)
+}
+
 // Client makes requests to the upstream Copilot API.
 type Client struct {
 	TokenProvider      TokenProvider
@@ -76,6 +82,7 @@ type Request struct {
 	Body         interface{}       // []byte, io.Reader, or JSON-marshalable struct; nil for no body
 	QueryString  string            // raw query string to append (without leading '?')
 	Stream       bool              // if true, returns *http.Response instead of reading body
+	ModelAccess  bool              // use Copilot's metadata headers for model catalog requests
 	ExtraHeaders map[string]string // additional headers to set after copilot headers
 }
 
@@ -96,7 +103,32 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, []byte, err
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get valid token: %w", err)
 	}
+	return c.do(ctx, r, token, "")
+}
 
+// DoModelAccessWithGitHubToken retries the model catalog request using the
+// long-lived GitHub OAuth token and the developer CLI integration identity.
+// Some Copilot accounts reject the normal conversation identity for /models.
+func (c *Client) DoModelAccessWithGitHubToken(ctx context.Context, r Request) (*http.Response, []byte, error) {
+	if r.Method != http.MethodGet || r.Endpoint != "/models" {
+		return nil, nil, fmt.Errorf("GitHub OAuth model-access fallback only supports GET /models")
+	}
+
+	provider, ok := c.TokenProvider.(GitHubTokenProvider)
+	if !ok {
+		return nil, nil, fmt.Errorf("token provider does not expose a GitHub OAuth token")
+	}
+
+	token, err := provider.GetGitHubToken(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get GitHub OAuth token: %w", err)
+	}
+
+	r.ModelAccess = true
+	return c.do(ctx, r, token, "copilot-developer-cli")
+}
+
+func (c *Client) do(ctx context.Context, r Request, token string, integrationID string) (*http.Response, []byte, error) {
 	// Resolve body to io.Reader
 	var bodyReader io.Reader
 	switch v := r.Body.(type) {
@@ -144,7 +176,11 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, []byte, err
 		return nil, nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	copilot.AddHeaders(req, token)
+	if r.ModelAccess {
+		copilot.AddModelAccessHeaders(req, token, integrationID)
+	} else {
+		copilot.AddHeaders(req, token)
+	}
 
 	if r.Stream {
 		req.Header.Set("Accept", "text/event-stream")

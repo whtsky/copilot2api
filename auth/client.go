@@ -94,6 +94,21 @@ func (c *Client) GetToken(ctx context.Context) (string, error) {
 	return tok.Token, nil
 }
 
+// GetGitHubToken returns the stored long-lived GitHub OAuth token. It is used
+// only for Copilot model-catalog compatibility fallback requests.
+func (c *Client) GetGitHubToken(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.creds.GitHubToken == "" {
+		return "", fmt.Errorf("no GitHub token available")
+	}
+	return c.creds.GitHubToken, nil
+}
+
 // GetBaseURL returns the base URL for API calls
 func (c *Client) GetBaseURL() string {
 	c.mu.RLock()

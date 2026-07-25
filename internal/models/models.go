@@ -3,6 +3,7 @@ package models
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -35,6 +36,8 @@ func SupportsLongContext(info *Info) bool {
 		info.Capabilities.Limits != nil &&
 		info.Capabilities.Limits.MaxContextWindowTokens >= longContextThreshold
 }
+
+const billingMigrationNotice = "Your billing plan has changed to usage-based billing and model multipliers no longer apply. Please update your client to the latest version to see the new billing information."
 
 // modelsListResponse is the response from the /models endpoint.
 type modelsListResponse struct {
@@ -133,17 +136,59 @@ func (c *Cache) get(ctx context.Context) ([]byte, map[string]*Info, error) {
 }
 
 func (c *Cache) fetch(ctx context.Context) (cacheData, error) {
-	_, respData, err := c.upstream.Do(ctx, upstream.Request{
-		Method:   "GET",
-		Endpoint: "/models",
-	})
-	if err != nil {
-		return cacheData{}, fmt.Errorf("models request failed: %w", err)
+	request := upstream.Request{
+		Method:      "GET",
+		Endpoint:    "/models",
+		ModelAccess: true,
+	}
+	_, respData, primaryErr := c.upstream.Do(ctx, request)
+	if primaryErr == nil {
+		data, err := parseModelsResponse(respData)
+		if err == nil {
+			return data, nil
+		}
+		primaryErr = err
 	}
 
+	if !containsBillingMigrationNotice(respData, primaryErr) {
+		return cacheData{}, fmt.Errorf("models request failed: %w", primaryErr)
+	}
+
+	// Some accounts still reject the standard model-access identity during the
+	// billing migration. Match the Copilot developer CLI's fallback: retry the
+	// catalog with the GitHub OAuth token and its integration identity.
+	slog.Debug("standard models request returned the billing migration notice, trying developer CLI fallback")
+	_, fallbackData, fallbackErr := c.upstream.DoModelAccessWithGitHubToken(ctx, request)
+	if fallbackErr == nil {
+		data, err := parseModelsResponse(fallbackData)
+		if err == nil {
+			return data, nil
+		}
+		fallbackErr = err
+	}
+
+	return cacheData{}, fmt.Errorf(
+		"models request failed: %w",
+		errors.Join(primaryErr, fmt.Errorf("developer CLI fallback failed: %w", fallbackErr)),
+	)
+}
+
+func containsBillingMigrationNotice(respData []byte, err error) bool {
+	if strings.Contains(string(respData), billingMigrationNotice) {
+		return true
+	}
+
+	var upstreamErr *upstream.UpstreamError
+	return errors.As(err, &upstreamErr) && strings.Contains(string(upstreamErr.Body), billingMigrationNotice)
+}
+
+func parseModelsResponse(respData []byte) (cacheData, error) {
 	var modelsResp modelsListResponse
 	if err := json.Unmarshal(respData, &modelsResp); err != nil {
 		return cacheData{}, fmt.Errorf("failed to parse models response: %w", err)
+	}
+	if modelsResp.Data == nil {
+		return cacheData{}, fmt.Errorf("models response missing data array")
 	}
 
 	parsed := make(map[string]*Info, len(modelsResp.Data))

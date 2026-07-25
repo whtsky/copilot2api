@@ -11,9 +11,10 @@ import (
 
 // Exported constants for User-Agent and version headers.
 const (
-	CopilotUserAgent    = "GitHubCopilotChat/0.39.0"
-	EditorVersion       = "vscode/1.111.0"
-	EditorPluginVersion = "copilot-chat/0.39.0"
+	CopilotUserAgent    = "GitHubCopilotChat/0.58.0"
+	EditorVersion       = "vscode/1.120.0"
+	EditorPluginVersion = "copilot-chat/0.58.0"
+	CopilotAPIVersion   = "2026-06-01"
 )
 
 // AddHeaders adds required Copilot headers to the request
@@ -25,11 +26,23 @@ func AddHeaders(req *http.Request, token string) {
 	req.Header.Set("Copilot-Integration-Id", "vscode-chat")
 	req.Header.Set("Openai-Intent", "conversation-agent")
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Github-Api-Version", "2025-04-01")
+	req.Header.Set("X-Github-Api-Version", CopilotAPIVersion)
 
 	// Generate request ID if not present
 	if req.Header.Get("X-Request-Id") == "" {
 		req.Header.Set("X-Request-Id", GenerateRequestID())
+	}
+}
+
+// AddModelAccessHeaders adds the headers used by Copilot's model catalog
+// endpoint. The catalog is a metadata request, not a conversation request.
+func AddModelAccessHeaders(req *http.Request, token string, integrationID string) {
+	AddHeaders(req, token)
+	req.Header.Set("Openai-Intent", "model-access")
+	req.Header.Set("X-Interaction-Type", "model-access")
+	req.Header.Del("Content-Type")
+	if integrationID != "" {
+		req.Header.Set("Copilot-Integration-Id", integrationID)
 	}
 }
 
