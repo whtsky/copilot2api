@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-25
+
 ### Features
 
 - Auto-inject `contextTier: "long_context"` into upstream POST request bodies for models that support the 1M context window (detected from `max_context_window_tokens` in the `/models` response). Models that don't support long context (e.g., GPT-5 mini, Gemini, Claude Haiku 4.5) are left untouched. Configurable via `COPILOT2API_CONTEXT_TIER` env var: omit for auto-detect, set to empty string to disable, or set a value (e.g. `long_context`) to force for all models
