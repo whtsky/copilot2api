@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- Avoid injecting the Copilot-specific `contextTier` field into native Anthropic `/v1/messages` requests, which the upstream schema rejects as an extra input
+
 ## [0.5.0] - 2026-07-25
 
 ### Features

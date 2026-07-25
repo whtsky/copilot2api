@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/whtsky/copilot2api/internal/copilot"
@@ -153,8 +154,10 @@ func (c *Client) do(ctx context.Context, r Request, token string, integrationID 
 		upstreamURL += "?" + r.QueryString
 	}
 
-	// Inject contextTier for POST requests with a JSON body.
-	if r.Method == "" || r.Method == "POST" {
+	// Inject contextTier only for OpenAI-compatible upstream endpoints.
+	// Copilot's native Anthropic /v1/messages schema rejects this
+	// Copilot-specific field with "Extra inputs are not permitted".
+	if (r.Method == "" || r.Method == "POST") && supportsContextTierEndpoint(r.Endpoint) {
 		bodyReader = c.injectContextTier(bodyReader)
 	}
 
@@ -243,6 +246,16 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// supportsContextTierEndpoint reports whether the endpoint accepts Copilot's
+// contextTier request extension. The native Anthropic Messages endpoint does
+// not: it validates the request against Anthropic's schema and rejects the
+// extra top-level field. Keep this allowlist endpoint-based rather than
+// model-based because a model can advertise more than one endpoint family.
+func supportsContextTierEndpoint(endpoint string) bool {
+	endpoint = strings.TrimPrefix(endpoint, "/v1")
+	return endpoint == "/responses" || endpoint == "/chat/completions"
 }
 
 // injectContextTier reads the body, injects contextTier if absent, and returns
