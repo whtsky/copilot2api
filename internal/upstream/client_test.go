@@ -187,3 +187,26 @@ func TestInjectContextTier_NilCheckerForceMode(t *testing.T) {
 		t.Error("contextTier should be injected unconditionally when checker is nil (force mode)")
 	}
 }
+
+func TestSupportsContextTierEndpoint(t *testing.T) {
+	tests := []struct {
+		endpoint string
+		want     bool
+	}{
+		{endpoint: "/responses", want: true},
+		{endpoint: "/chat/completions", want: true},
+		{endpoint: "/v1/responses", want: true},
+		{endpoint: "/v1/chat/completions", want: true},
+		{endpoint: "/v1/messages", want: false},
+		{endpoint: "/messages", want: false},
+		{endpoint: "/models", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.endpoint, func(t *testing.T) {
+			if got := supportsContextTierEndpoint(tt.endpoint); got != tt.want {
+				t.Fatalf("supportsContextTierEndpoint(%q) = %v, want %v", tt.endpoint, got, tt.want)
+			}
+		})
+	}
+}
