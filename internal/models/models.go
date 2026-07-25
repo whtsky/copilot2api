@@ -13,10 +13,27 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// Info contains model metadata including supported endpoints.
+// Info contains model metadata including supported endpoints and capabilities.
 type Info struct {
-	ID                 string   `json:"id"`
-	SupportedEndpoints []string `json:"supported_endpoints"`
+	ID                 string        `json:"id"`
+	SupportedEndpoints []string      `json:"supported_endpoints"`
+	Capabilities       *Capabilities `json:"capabilities,omitempty"`
+}
+
+type Capabilities struct {
+	Limits *Limits `json:"limits,omitempty"`
+}
+
+type Limits struct {
+	MaxContextWindowTokens int `json:"max_context_window_tokens"`
+}
+
+const longContextThreshold = 500_000
+
+func SupportsLongContext(info *Info) bool {
+	return info != nil && info.Capabilities != nil &&
+		info.Capabilities.Limits != nil &&
+		info.Capabilities.Limits.MaxContextWindowTokens >= longContextThreshold
 }
 
 // modelsListResponse is the response from the /models endpoint.

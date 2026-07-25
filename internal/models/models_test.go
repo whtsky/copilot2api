@@ -128,3 +128,57 @@ func TestNormalizeEndpoint(t *testing.T) {
 		})
 	}
 }
+
+func TestSupportsLongContext(t *testing.T) {
+	tests := []struct {
+		name string
+		info *Info
+		want bool
+	}{
+		{
+			name: "nil info",
+			info: nil,
+			want: false,
+		},
+		{
+			name: "nil capabilities",
+			info: &Info{ID: "gpt-5-mini"},
+			want: false,
+		},
+		{
+			name: "nil limits",
+			info: &Info{ID: "gpt-5-mini", Capabilities: &Capabilities{}},
+			want: false,
+		},
+		{
+			name: "below threshold",
+			info: &Info{ID: "gpt-5-mini", Capabilities: &Capabilities{
+				Limits: &Limits{MaxContextWindowTokens: 200_000},
+			}},
+			want: false,
+		},
+		{
+			name: "at threshold",
+			info: &Info{ID: "gpt-5.4", Capabilities: &Capabilities{
+				Limits: &Limits{MaxContextWindowTokens: 500_000},
+			}},
+			want: true,
+		},
+		{
+			name: "above threshold (1M model)",
+			info: &Info{ID: "gpt-5.5", Capabilities: &Capabilities{
+				Limits: &Limits{MaxContextWindowTokens: 1_050_000},
+			}},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SupportsLongContext(tt.info)
+			if got != tt.want {
+				t.Errorf("SupportsLongContext() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

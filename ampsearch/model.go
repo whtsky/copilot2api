@@ -22,7 +22,10 @@ func NewModelBackend(client *upstream.Client, model string) *ModelBackend {
 	if model == "" {
 		model = "gpt-5-mini"
 	}
-	return &ModelBackend{client: client, model: model, httpClient: &http.Client{Timeout: 30 * time.Second}}
+	return &ModelBackend{client: client, model: model, httpClient: &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: &http.Transport{Proxy: http.ProxyFromEnvironment},
+	}}
 }
 
 func (m *ModelBackend) Search(queries []string, maxResults int) ([]SearchResult, error) {

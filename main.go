@@ -34,11 +34,8 @@ func main() {
 		tokenDir    = flag.String("token-dir", "", "Token storage directory (env: COPILOT2API_TOKEN_DIR, default: ~/.config/copilot2api)")
 		showVersion = flag.Bool("version", false, "Show version and exit")
 		debug       = flag.Bool("debug", false, "Enable debug logging (env: COPILOT2API_DEBUG)")
-
 	)
 	flag.Parse()
-
-
 
 	// Apply debug env var
 	if !*debug {
@@ -121,14 +118,28 @@ func main() {
 	upstreamClient := upstream.NewClient(authClient, transport, *debug)
 	modelsCache := models.NewCache(upstreamClient, 5*time.Minute)
 
+	// Context tier: auto-detect per model by default, env var for force/disable.
+	if v, ok := os.LookupEnv("COPILOT2API_CONTEXT_TIER"); ok {
+		upstreamClient.DefaultContextTier = v
+	} else {
+		upstreamClient.DefaultContextTier = "long_context"
+		upstreamClient.LongContextChecker = func(modelID string) bool {
+			infoMap, err := modelsCache.GetInfo(context.Background())
+			if err != nil {
+				return false
+			}
+			return models.SupportsLongContext(infoMap[modelID])
+		}
+	}
+
 	// Initialize proxy handler
-	proxyHandler := proxy.NewHandler(authClient, transport, modelsCache, *debug)
+	proxyHandler := proxy.NewHandler(upstreamClient, authClient, modelsCache)
 
 	// Initialize Anthropic handler
-	anthropicHandler := anthropic.NewHandler(authClient, transport, modelsCache, *debug)
+	anthropicHandler := anthropic.NewHandler(upstreamClient, modelsCache)
 
 	// Initialize Gemini handler
-	geminiHandler := gemini.NewHandler(authClient, transport, modelsCache, *debug)
+	geminiHandler := gemini.NewHandler(upstreamClient, modelsCache)
 
 	// Set up routes
 	mux := http.NewServeMux()

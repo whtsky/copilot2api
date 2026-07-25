@@ -25,8 +25,8 @@ type Handler struct {
 	models   *models.Cache
 }
 
-func NewHandler(authClient upstream.TokenProvider, transport *http.Transport, mc *models.Cache, debug bool) *Handler {
-	return &Handler{upstream: upstream.NewClient(authClient, transport, debug), models: mc}
+func NewHandler(uc *upstream.Client, mc *models.Cache) *Handler {
+	return &Handler{upstream: uc, models: mc}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

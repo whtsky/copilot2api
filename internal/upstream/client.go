@@ -25,16 +25,24 @@ type TokenProvider interface {
 
 // Client makes requests to the upstream Copilot API.
 type Client struct {
-	TokenProvider TokenProvider
-	HTTPClient    *http.Client
-	Debug         bool
+	TokenProvider      TokenProvider
+	HTTPClient         *http.Client
+	Debug              bool
+	DefaultContextTier string
+	// LongContextChecker gates contextTier injection per model.
+	// When non-nil, injection only happens if the checker returns true for the
+	// model ID extracted from the request body. When nil, injection is
+	// unconditional (force mode).
+	LongContextChecker func(modelID string) bool
 }
 
 // NewTransport creates a shared http.Transport suitable for upstream requests.
+// Respects HTTP_PROXY / HTTPS_PROXY / ALL_PROXY environment variables.
 func NewTransport() *http.Transport {
 	return &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
-		TLSClientConfig:      &tls.Config{MinVersion: tls.VersionTLS12},
+		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   20,
 		IdleConnTimeout:       120 * time.Second,
@@ -63,11 +71,11 @@ func NewClient(tp TokenProvider, transport *http.Transport, debug bool) *Client 
 
 // Request configures a single upstream request.
 type Request struct {
-	Method      string
-	Endpoint    string
-	Body        interface{} // []byte, io.Reader, or JSON-marshalable struct; nil for no body
-	QueryString string      // raw query string to append (without leading '?')
-	Stream      bool        // if true, returns *http.Response instead of reading body
+	Method       string
+	Endpoint     string
+	Body         interface{}       // []byte, io.Reader, or JSON-marshalable struct; nil for no body
+	QueryString  string            // raw query string to append (without leading '?')
+	Stream       bool              // if true, returns *http.Response instead of reading body
 	ExtraHeaders map[string]string // additional headers to set after copilot headers
 }
 
@@ -111,6 +119,11 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, []byte, err
 	upstreamURL := baseURL + r.Endpoint
 	if r.QueryString != "" {
 		upstreamURL += "?" + r.QueryString
+	}
+
+	// Inject contextTier for POST requests with a JSON body.
+	if r.Method == "" || r.Method == "POST" {
+		bodyReader = c.injectContextTier(bodyReader)
 	}
 
 	// Apply timeout for non-streaming requests
@@ -194,4 +207,50 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// injectContextTier reads the body, injects contextTier if absent, and returns
+// a new reader. Returns the original reader unchanged if injection is disabled,
+// the body is nil, or the body is not valid JSON. When LongContextChecker is
+// set, injection only happens if the checker approves the model in the body.
+func (c *Client) injectContextTier(body io.Reader) io.Reader {
+	if c.DefaultContextTier == "" || body == nil {
+		return body
+	}
+
+	data, err := io.ReadAll(body)
+	if err != nil || len(data) == 0 {
+		if len(data) > 0 {
+			return bytes.NewReader(data)
+		}
+		return body
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return bytes.NewReader(data)
+	}
+
+	if _, exists := raw["contextTier"]; exists {
+		return bytes.NewReader(data)
+	}
+
+	if c.LongContextChecker != nil {
+		var modelID string
+		if m, ok := raw["model"]; ok {
+			json.Unmarshal(m, &modelID)
+		}
+		if !c.LongContextChecker(modelID) {
+			return bytes.NewReader(data)
+		}
+	}
+
+	tierJSON, _ := json.Marshal(c.DefaultContextTier)
+	raw["contextTier"] = tierJSON
+
+	modified, err := json.Marshal(raw)
+	if err != nil {
+		return bytes.NewReader(data)
+	}
+	return bytes.NewReader(modified)
 }

@@ -18,7 +18,10 @@ const (
 )
 
 // sharedHTTPClient is reused across the auth package to enable connection pooling.
-var sharedHTTPClient = &http.Client{Timeout: 30 * time.Second}
+var sharedHTTPClient = &http.Client{
+	Timeout:   30 * time.Second,
+	Transport: &http.Transport{Proxy: http.ProxyFromEnvironment},
+}
 
 type CopilotTokenResponse struct {
 	Token     string `json:"token"`

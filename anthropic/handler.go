@@ -24,10 +24,9 @@ type Handler struct {
 }
 
 // NewHandler creates a new Anthropic handler.
-// The transport is used for upstream HTTP requests (pass nil to create a new one).
-func NewHandler(authClient upstream.TokenProvider, transport *http.Transport, mc *models.Cache, debug bool) *Handler {
+func NewHandler(uc *upstream.Client, mc *models.Cache) *Handler {
 	return &Handler{
-		upstream: upstream.NewClient(authClient, transport, debug),
+		upstream: uc,
 		models:   mc,
 	}
 }
