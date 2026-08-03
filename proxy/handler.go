@@ -21,14 +21,16 @@ type Handler struct {
 	upstream    *upstream.Client
 	authClient  *auth.Client
 	modelsCache *models.Cache
+	modelRoutes models.ModelRoutes
 }
 
 // NewHandler creates a new proxy handler.
-func NewHandler(uc *upstream.Client, authClient *auth.Client, mc *models.Cache) *Handler {
+func NewHandler(uc *upstream.Client, authClient *auth.Client, mc *models.Cache, modelRoutes models.ModelRoutes) *Handler {
 	return &Handler{
 		upstream:    uc,
 		authClient:  authClient,
 		modelsCache: mc,
+		modelRoutes: modelRoutes,
 	}
 }
 
@@ -94,6 +96,16 @@ func (h *Handler) handlePassthrough(w http.ResponseWriter, r *http.Request, endp
 			WriteOpenAIError(w, http.StatusRequestEntityTooLarge, OpenAIErrorTypeInvalidRequest, "Request body too large")
 			return
 		}
+
+		if r.Method == http.MethodPost && (endpoint == "/chat/completions" || endpoint == "/responses") {
+			rewritten, from, to, changed := h.modelRoutes.RewriteJSON(bodyBytes)
+			if changed {
+				bodyBytes = rewritten
+				r.ContentLength = int64(len(bodyBytes))
+				slog.Info("model routing", "from", from, "to", to, "endpoint", endpoint)
+			}
+		}
+
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	}
 

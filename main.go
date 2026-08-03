@@ -32,6 +32,7 @@ func main() {
 		port        = flag.Int("port", 0, "Server port (env: COPILOT2API_PORT, default: 7777)")
 		host        = flag.String("host", "", "Server host (env: COPILOT2API_HOST, default: 127.0.0.1)")
 		tokenDir    = flag.String("token-dir", "", "Token storage directory (env: COPILOT2API_TOKEN_DIR, default: ~/.config/copilot2api)")
+		modelRoutes = flag.String("model-routes", "", "JSON model route map (env: COPILOT2API_MODEL_ROUTES)")
 		showVersion = flag.Bool("version", false, "Show version and exit")
 		debug       = flag.Bool("debug", false, "Enable debug logging (env: COPILOT2API_DEBUG)")
 	)
@@ -69,6 +70,11 @@ func main() {
 			*tokenDir = v
 		}
 	}
+	if *modelRoutes == "" {
+		if v, ok := os.LookupEnv("COPILOT2API_MODEL_ROUTES"); ok {
+			*modelRoutes = v
+		}
+	}
 
 	if *showVersion {
 		fmt.Printf("copilot2api version %s\n", version)
@@ -84,6 +90,12 @@ func main() {
 		Level: logLevel,
 	}))
 	slog.SetDefault(logger)
+
+	parsedModelRoutes, err := models.ParseModelRoutes(*modelRoutes)
+	if err != nil {
+		slog.Error("invalid model routes configuration", "error", err)
+		os.Exit(1)
+	}
 
 	// Determine token directory
 	if *tokenDir == "" {
@@ -133,7 +145,7 @@ func main() {
 	}
 
 	// Initialize proxy handler
-	proxyHandler := proxy.NewHandler(upstreamClient, authClient, modelsCache)
+	proxyHandler := proxy.NewHandler(upstreamClient, authClient, modelsCache, parsedModelRoutes)
 
 	// Initialize Anthropic handler
 	anthropicHandler := anthropic.NewHandler(upstreamClient, modelsCache)

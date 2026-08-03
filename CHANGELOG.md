@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Features
+
+- Add built-in exact-match model routing from Codex's `codex-auto-review` pseudo-model to `gpt-5.6-luna`, with `COPILOT2API_MODEL_ROUTES` and `-model-routes` configuration for custom compatible model route sets
+
 ## [0.5.1] - 2026-07-25
 
 ### Bug Fixes

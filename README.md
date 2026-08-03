@@ -125,6 +125,19 @@ wire_api = "responses"
 api_key = "dummy"
 ```
 
+copilot2api includes a built-in compatibility route for Codex automatic approval review: `codex-auto-review` is sent upstream as `gpt-5.6-luna`, so Codex sandbox escalation review does not fail on Copilot model catalogs that do not expose the pseudo-model. No extra setting is required for the default route.
+
+To replace the built-in route set with custom exact-match routes, use JSON through the environment or CLI flag:
+
+```bash
+COPILOT2API_MODEL_ROUTES='{"codex-auto-review":"gpt-5.6-luna","my-model":"gpt-5.6-sol"}' ./copilot2api
+# Docker Compose:
+# environment:
+#   COPILOT2API_MODEL_ROUTES: '{"codex-auto-review":"gpt-5.6-luna"}'
+```
+
+Routes apply to OpenAI-compatible `/v1/responses` and `/v1/chat/completions` requests before endpoint capability routing. Matching is exact and one-hop; `{}` explicitly disables the built-in routes. The alias is not added to `/v1/models`, and the upstream response is passed through unchanged.
+
 ## Usage with Gemini CLI
 
 Add to `~/.gemini/.env`:
@@ -248,6 +261,7 @@ message = client.messages.create(
   -host string       Server host (default "127.0.0.1")
   -port int          Server port (default 7777)
   -token-dir string  Token storage directory (default ~/.config/copilot2api)
+  -model-routes string  JSON model route map (default built-in Codex route)
   -debug             Enable debug logging
   -version           Show version and exit
 ```
@@ -261,6 +275,7 @@ Environment variables are used as defaults when flags are not provided:
 | `COPILOT2API_HOST` | Server host | `127.0.0.1` |
 | `COPILOT2API_PORT` | Server port | `7777` |
 | `COPILOT2API_TOKEN_DIR` | Token storage directory | `~/.config/copilot2api` |
+| `COPILOT2API_MODEL_ROUTES` | JSON exact-match model route map; replaces the built-in route set | `{"codex-auto-review":"gpt-5.6-luna"}` |
 | `COPILOT2API_DEBUG` | Enable debug logging (`true`/`false`, `1`/`0`) | `false` |
 | `JINA_API_KEY` | Jina API key for amp page extraction (optional) | — |
 
@@ -270,9 +285,10 @@ CLI flags take precedence over environment variables.
 
 1. Authenticates with GitHub via Device Flow OAuth
 2. Exchanges GitHub token for Copilot API token (auto-refreshes)
-3. Proxies OpenAI-format requests directly to Copilot API
-4. Routes Anthropic Messages requests by model capabilities (native `/v1/messages`, translated `/responses`, or translated `/chat/completions`)
-5. Automatically detects API endpoint from token (Individual/Business/Enterprise)
+3. Applies the configured exact-match model route before OpenAI endpoint capability routing (with `codex-auto-review` → `gpt-5.6-luna` built in)
+4. Proxies OpenAI-format requests directly to Copilot API
+5. Routes Anthropic Messages requests by model capabilities (native `/v1/messages`, translated `/responses`, or translated `/chat/completions`)
+6. Automatically detects API endpoint from token (Individual/Business/Enterprise)
 
 ## Development
 
